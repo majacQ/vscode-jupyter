@@ -2037,7 +2037,7 @@
         "slickgrid": "^2.4.17",
         "stack-trace": "0.0.10",
         "string-argv": "^0.3.1",
-        "strip-ansi": "^5.2.0",
+        "strip-ansi": "^7.0.1",
         "styled-components": "^5.2.1",
         "svg-inline-react": "^3.1.0",
         "svg-to-pdfkit": "^0.1.8",
