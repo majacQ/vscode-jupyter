@@ -2033,7 +2033,7 @@
         "rxjs": "^6.5.4",
         "rxjs-compat": "^6.5.4",
         "sanitize-filename": "^1.6.3",
-        "semver": "^5.5.0",
+        "semver": "^7.3.5",
         "slickgrid": "^2.4.17",
         "stack-trace": "0.0.10",
         "string-argv": "^0.3.1",
