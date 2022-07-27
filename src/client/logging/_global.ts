@@ -3,6 +3,7 @@
 'use strict';
 
 import * as winston from 'winston';
+import { isCI } from '../common/constants';
 import { IOutputChannel } from '../common/types';
 import { CallInfo } from '../common/utils/decorators';
 import { getFormatter } from './formatters';
@@ -80,7 +81,7 @@ export function log(logLevel: LogLevel, ...args: Arguments) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function logVerbose(...args: any[]) {
-    log(LogLevel.Info, ...args);
+    log(LogLevel.Trace, ...args);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -94,8 +95,8 @@ export function logInfo(...args: any[]) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function logInfoIf(condition: boolean, ...args: any[]) {
-    if (condition) {
+export function logInfoOnCI(...args: any[]) {
+    if (isCI) {
         log(LogLevel.Info, ...args);
     }
 }
@@ -121,7 +122,7 @@ export namespace traceDecorators {
     const DEFAULT_OPTS: TraceOptions = TraceOptions.Arguments | TraceOptions.ReturnValue;
 
     export function verbose(message: string, opts: TraceOptions = DEFAULT_OPTS) {
-        return createTracingDecorator([globalLogger], { message, opts });
+        return createTracingDecorator([globalLogger], { message, opts, level: LogLevel.Trace });
     }
     export function error(message: string) {
         const opts = DEFAULT_OPTS;
@@ -130,7 +131,7 @@ export namespace traceDecorators {
     }
     export function info(message: string) {
         const opts = TraceOptions.None;
-        return createTracingDecorator([globalLogger], { message, opts });
+        return createTracingDecorator([globalLogger], { message, opts, level: LogLevel.Info });
     }
     export function warn(message: string) {
         const opts = DEFAULT_OPTS;

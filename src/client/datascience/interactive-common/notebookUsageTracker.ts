@@ -2,27 +2,25 @@
 // Licensed under the MIT License.
 
 import { inject, injectable } from 'inversify';
-import { EventEmitter, notebook, NotebookCellExecutionStateChangeEvent } from 'vscode';
+import { notebooks, NotebookCellExecutionStateChangeEvent, NotebookDocument, NotebookCellExecutionState } from 'vscode';
 import { IExtensionSingleActivationService } from '../../activation/types';
-import { IWorkspaceService } from '../../common/application/types';
+import { IVSCodeNotebook, IWorkspaceService } from '../../common/application/types';
 import { IDisposableRegistry } from '../../common/types';
 import { noop } from '../../common/utils/misc';
 import { sendTelemetryEvent } from '../../telemetry';
 import { Telemetry } from '../constants';
-import { INotebookEditor, INotebookEditorProvider } from '../types';
+import { isJupyterNotebook } from '../notebook/helpers/helpers';
 
 /**
  * This class tracks opened notebooks, # of notebooks in workspace & # of executed notebooks.
  */
 @injectable()
 export class NotebookUsageTracker implements IExtensionSingleActivationService {
-    protected readonly _onDidChangeActiveNotebookEditor = new EventEmitter<INotebookEditor | undefined>();
-    protected readonly _onDidOpenNotebookEditor = new EventEmitter<INotebookEditor>();
     private readonly executedNotebooksIndexedByUri = new Set<string>();
     private notebookCount: number = 0;
     private openedNotebookCount: number = 0;
     constructor(
-        @inject(INotebookEditorProvider) private readonly editorProvider: INotebookEditorProvider,
+        @inject(IVSCodeNotebook) private readonly vscNotebook: IVSCodeNotebook,
         @inject(IWorkspaceService) private readonly workspace: IWorkspaceService,
         @inject(IDisposableRegistry) private readonly disposables: IDisposableRegistry
     ) {}
@@ -34,8 +32,21 @@ export class NotebookUsageTracker implements IExtensionSingleActivationService {
         if (findFilesPromise && findFilesPromise.then) {
             findFilesPromise.then((r) => (this.notebookCount += r.length), noop);
         }
-        this.editorProvider.onDidOpenNotebookEditor(this.onEditorOpened, this, this.disposables);
-        notebook.onDidChangeCellExecutionState(this.onDidChangeCellExecutionState, this, this.disposables);
+        this.vscNotebook.onDidOpenNotebookDocument(this.onEditorOpened, this, this.disposables);
+        this.vscNotebook.onDidChangeNotebookCellExecutionState(
+            (e) => {
+                if (isJupyterNotebook(e.cell.notebook) && e.state !== NotebookCellExecutionState.Idle) {
+                    this.executedNotebooksIndexedByUri.add(e.cell.notebook.uri.fsPath);
+                }
+            },
+            this,
+            this.disposables
+        );
+        notebooks.onDidChangeNotebookCellExecutionState(
+            this.onDidChangeNotebookCellExecutionState,
+            this,
+            this.disposables
+        );
     }
     public dispose() {
         // Send a bunch of telemetry
@@ -51,16 +62,16 @@ export class NotebookUsageTracker implements IExtensionSingleActivationService {
             sendTelemetryEvent(Telemetry.NotebookWorkspaceCount, undefined, { count: this.notebookCount });
         }
     }
-    private onEditorOpened(editor: INotebookEditor): void {
+    private onEditorOpened(doc: NotebookDocument): void {
+        if (!isJupyterNotebook(doc)) {
+            return;
+        }
         this.openedNotebookCount += 1;
-        if (editor.model?.isUntitled) {
+        if (doc.isUntitled) {
             this.notebookCount += 1;
         }
-        if (!this.executedNotebooksIndexedByUri.has(editor.file.fsPath) && editor.executed) {
-            editor.executed((e) => this.executedNotebooksIndexedByUri.add(e.file.fsPath), this, this.disposables);
-        }
     }
-    private onDidChangeCellExecutionState(e: NotebookCellExecutionStateChangeEvent): void {
+    private onDidChangeNotebookCellExecutionState(e: NotebookCellExecutionStateChangeEvent): void {
         this.executedNotebooksIndexedByUri.add(e.cell.notebook.uri.fsPath);
     }
 }

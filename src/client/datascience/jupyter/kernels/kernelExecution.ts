@@ -3,20 +3,23 @@
 
 'use strict';
 
-import { notebook, NotebookCell, NotebookCellKind, NotebookDocument } from 'vscode';
-import { ServerStatus } from '../../../../datascience-ui/interactive-common/mainState';
+import { EventEmitter, NotebookCell, NotebookCellKind, NotebookController, NotebookDocument, workspace } from 'vscode';
 import { IApplicationShell } from '../../../common/application/types';
 import { traceInfo, traceWarning } from '../../../common/logger';
-import { IDisposable, IDisposableRegistry, IExtensionContext } from '../../../common/types';
+import { IDisposable, IDisposableRegistry } from '../../../common/types';
 import { createDeferred, waitForPromise } from '../../../common/utils/async';
 import { StopWatch } from '../../../common/utils/stopWatch';
 import { captureTelemetry } from '../../../telemetry';
-import { Telemetry, VSCodeNativeTelemetry } from '../../constants';
+import { Telemetry } from '../../constants';
 import { sendKernelTelemetryEvent, trackKernelResourceInformation } from '../../telemetry/telemetry';
-import { IDataScienceErrorHandler, IJupyterSession, INotebook, InterruptResult } from '../../types';
+import { IDataScienceErrorHandler, IJupyterSession, InterruptResult } from '../../types';
+import { CellOutputDisplayIdTracker } from './cellDisplayIdTracker';
 import { CellExecutionFactory } from './cellExecution';
 import { CellExecutionQueue } from './cellExecutionQueue';
-import type { IKernel, IKernelProvider, KernelConnectionMetadata } from './types';
+import type { IKernel, KernelConnectionMetadata } from './types';
+import { NotebookCellRunState } from './types';
+import { CellHashProviderFactory } from '../../editor-integration/cellHashProviderFactory';
+import { KernelMessage } from '@jupyterlab/services';
 
 /**
  * Separate class that deals just with kernel execution.
@@ -26,66 +29,66 @@ export class KernelExecution implements IDisposable {
     private readonly documentExecutions = new WeakMap<NotebookDocument, CellExecutionQueue>();
     private readonly executionFactory: CellExecutionFactory;
     private readonly disposables: IDisposable[] = [];
-    private readonly kernelRestartHandlerAdded = new WeakSet<IKernel>();
     private _interruptPromise?: Promise<InterruptResult>;
+    private _restartPromise?: Promise<void>;
+    private readonly _onPreExecute = new EventEmitter<NotebookCell>();
     constructor(
-        private readonly kernelProvider: IKernelProvider,
+        private readonly kernel: IKernel,
         errorHandler: IDataScienceErrorHandler,
         appShell: IApplicationShell,
         readonly metadata: Readonly<KernelConnectionMetadata>,
-        context: IExtensionContext,
         private readonly interruptTimeout: number,
-        disposables: IDisposableRegistry
+        disposables: IDisposableRegistry,
+        controller: NotebookController,
+        outputTracker: CellOutputDisplayIdTracker,
+        cellHashProviderFactory: CellHashProviderFactory
     ) {
-        this.executionFactory = new CellExecutionFactory(errorHandler, appShell, context, disposables);
+        this.executionFactory = new CellExecutionFactory(
+            kernel,
+            errorHandler,
+            appShell,
+            disposables,
+            controller,
+            outputTracker,
+            cellHashProviderFactory
+        );
     }
 
-    @captureTelemetry(Telemetry.ExecuteNativeCell, undefined, true)
-    public async executeCell(notebookPromise: Promise<INotebook>, cell: NotebookCell): Promise<void> {
-        if (cell.kind == NotebookCellKind.Markdown) {
-            return;
+    public get onPreExecute() {
+        return this._onPreExecute.event;
+    }
+
+    public async executeCell(
+        sessionPromise: Promise<IJupyterSession>,
+        cell: NotebookCell
+    ): Promise<NotebookCellRunState> {
+        if (cell.kind == NotebookCellKind.Markup) {
+            return NotebookCellRunState.Success;
         }
-        sendKernelTelemetryEvent(cell.notebook.uri, Telemetry.ExecuteNativeCell);
-        const executionQueue = this.getOrCreateCellExecutionQueue(cell.notebook, notebookPromise);
+
+        // If we're restarting, wait for it to finish
+        if (this._restartPromise) {
+            await this._restartPromise;
+        }
+
+        const executionQueue = this.getOrCreateCellExecutionQueue(cell.notebook, sessionPromise);
         executionQueue.queueCell(cell);
-        await executionQueue.waitForCompletion([cell]);
+        const result = await executionQueue.waitForCompletion([cell]);
+        return result[0];
     }
 
-    @captureTelemetry(Telemetry.ExecuteNativeCell, undefined, true)
-    @captureTelemetry(VSCodeNativeTelemetry.RunAllCells, undefined, true)
-    public async executeAllCells(notebookPromise: Promise<INotebook>, document: NotebookDocument): Promise<void> {
-        sendKernelTelemetryEvent(document.uri, Telemetry.ExecuteNativeCell);
-        // Only run code cells that are not already running.
-        const cellsThatWeCanRun = document.getCells().filter((cell) => cell.kind === NotebookCellKind.Code);
-        if (cellsThatWeCanRun.length === 0) {
-            // This is an unlikely scenario (UI doesn't allow this).
-            // Seen this in CI tests when we manually run whole document using the commands.
-            return;
-        }
-
-        const executionQueue = this.getOrCreateCellExecutionQueue(document, notebookPromise);
-
-        try {
-            traceInfo('Update notebook execution state as running');
-
-            cellsThatWeCanRun.forEach((cell) => executionQueue.queueCell(cell));
-            await executionQueue.waitForCompletion(cellsThatWeCanRun);
-        } finally {
-            traceInfo('Restore notebook state to idle after completion');
-        }
-    }
     /**
      * Interrupts the execution of cells.
      * If we don't have a kernel (Jupyter Session) available, then just abort all of the cell executions.
      */
-    public async interrupt(document: NotebookDocument, notebookPromise?: Promise<INotebook>): Promise<InterruptResult> {
-        trackKernelResourceInformation(document.uri, { interruptKernel: true });
-        const executionQueue = this.documentExecutions.get(document);
+    public async interrupt(sessionPromise?: Promise<IJupyterSession>): Promise<InterruptResult> {
+        trackKernelResourceInformation(this.kernel.resourceUri, { interruptKernel: true });
+        const executionQueue = this.documentExecutions.get(this.kernel.notebookDocument);
         if (!executionQueue) {
             return InterruptResult.Success;
         }
         // Possible we don't have a notebook.
-        const notebook = notebookPromise ? await notebookPromise.catch(() => undefined) : undefined;
+        const session = sessionPromise ? await sessionPromise.catch(() => undefined) : undefined;
         traceInfo('Interrupt kernel execution');
         // First cancel all the cells & then wait for them to complete.
         // Both must happen together, we cannot just wait for cells to complete, as its possible
@@ -93,7 +96,7 @@ export class KernelExecution implements IDisposable {
         // What we want is, if Cell1 completes then Cell2 should not start (it must be cancelled before hand).
         const pendingCells = executionQueue.cancel().then(() => executionQueue.waitForCompletion());
 
-        if (!notebook) {
+        if (!session) {
             traceInfo('No notebook to interrupt');
             this._interruptPromise = undefined;
             await pendingCells;
@@ -103,36 +106,60 @@ export class KernelExecution implements IDisposable {
         // Interrupt the active execution
         const result = this._interruptPromise
             ? await this._interruptPromise
-            : await (this._interruptPromise = this.interruptExecution(document, notebook.session, pendingCells));
+            : await (this._interruptPromise = this.interruptExecution(session, pendingCells));
 
         // Done interrupting, clear interrupt promise
         this._interruptPromise = undefined;
 
         return result;
     }
+    /**
+     * Restarts the kernel
+     * If we don't have a kernel (Jupyter Session) available, then just abort all of the cell executions.
+     */
+    public async restart(sessionPromise?: Promise<IJupyterSession>): Promise<void> {
+        trackKernelResourceInformation(this.kernel.resourceUri, { restartKernel: true });
+        const executionQueue = this.documentExecutions.get(this.kernel.notebookDocument);
+        if (!executionQueue) {
+            return;
+        }
+        // Possible we don't have a notebook.
+        const session = sessionPromise ? await sessionPromise.catch(() => undefined) : undefined;
+        traceInfo('Restart kernel execution');
+        // First cancel all the cells & then wait for them to complete.
+        // Both must happen together, we cannot just wait for cells to complete, as its possible
+        // that cell1 has started & cell2 has been queued. If Cell1 completes, then Cell2 will start.
+        // What we want is, if Cell1 completes then Cell2 should not start (it must be cancelled before hand).
+        const pendingCells = executionQueue.cancel(true).then(() => executionQueue.waitForCompletion());
+
+        if (!session) {
+            traceInfo('No notebook to interrupt');
+            this._restartPromise = undefined;
+            await pendingCells;
+            return;
+        }
+
+        // Restart the active execution
+        await (this._restartPromise ? this._restartPromise : (this._restartPromise = this.restartExecution(session)));
+
+        // Done restarting, clear restart promise
+        this._restartPromise = undefined;
+    }
     public dispose() {
         this.disposables.forEach((d) => d.dispose());
     }
-    private getOrCreateCellExecutionQueue(document: NotebookDocument, notebookPromise: Promise<INotebook>) {
+    private getOrCreateCellExecutionQueue(document: NotebookDocument, sessionPromise: Promise<IJupyterSession>) {
         const existingExecutionQueue = this.documentExecutions.get(document);
         // Re-use the existing Queue if it can be used.
         if (existingExecutionQueue && !existingExecutionQueue.isEmpty && !existingExecutionQueue.failed) {
             return existingExecutionQueue;
         }
 
-        // We need to add the handler to kernel immediately (before we resolve the notebook, else its possible user hits restart or the like and we miss that event).
-        const wrappedNotebookPromise = this.getKernel(document)
-            .then((kernel) => this.addKernelRestartHandler(kernel, document))
-            .then(() => notebookPromise);
-
-        const newCellExecutionQueue = new CellExecutionQueue(
-            wrappedNotebookPromise,
-            this.executionFactory,
-            this.metadata
-        );
+        const newCellExecutionQueue = new CellExecutionQueue(sessionPromise, this.executionFactory, this.metadata);
+        this.disposables.push(newCellExecutionQueue);
 
         // If the document is closed (user or on CI), then just stop handling the UI updates & cancel cell execution queue.
-        notebook.onDidCloseNotebookDocument(
+        workspace.onDidCloseNotebookDocument(
             async (e: NotebookDocument) => {
                 if (e === document) {
                     if (!newCellExecutionQueue.failed || !newCellExecutionQueue.isEmpty) {
@@ -143,22 +170,21 @@ export class KernelExecution implements IDisposable {
             this,
             this.disposables
         );
-
+        newCellExecutionQueue.onPreExecute((c) => this._onPreExecute.fire(c), this, this.disposables);
         this.documentExecutions.set(document, newCellExecutionQueue);
         return newCellExecutionQueue;
     }
     @captureTelemetry(Telemetry.Interrupt)
     @captureTelemetry(Telemetry.InterruptJupyterTime)
     private async interruptExecution(
-        document: NotebookDocument,
         session: IJupyterSession,
         pendingCells: Promise<unknown>
     ): Promise<InterruptResult> {
         const restarted = createDeferred<boolean>();
         const stopWatch = new StopWatch();
         // Listen to status change events so we can tell if we're restarting
-        const restartHandler = (e: ServerStatus) => {
-            if (e === ServerStatus.Restarting) {
+        const restartHandler = (e: KernelMessage.Status) => {
+            if (e === 'restarting' || e === 'autorestarting') {
                 // We restarted the kernel.
                 traceWarning('Kernel restarting during interrupt');
 
@@ -169,7 +195,7 @@ export class KernelExecution implements IDisposable {
         const restartHandlerToken = session.onSessionStatusChanged(restartHandler);
 
         // Start our interrupt. If it fails, indicate a restart
-        session.interrupt(this.interruptTimeout).catch((exc) => {
+        session.interrupt().catch((exc) => {
             traceWarning(`Error during interrupt: ${exc}`);
             restarted.resolve(true);
         });
@@ -203,7 +229,7 @@ export class KernelExecution implements IDisposable {
 
                 // Otherwise a real error occurred.
                 sendKernelTelemetryEvent(
-                    document.uri,
+                    this.kernel.resourceUri,
                     Telemetry.NotebookInterrupt,
                     stopWatch.elapsedTime,
                     undefined,
@@ -216,40 +242,17 @@ export class KernelExecution implements IDisposable {
         })();
 
         return promise.then((result) => {
-            sendKernelTelemetryEvent(document.uri, Telemetry.NotebookInterrupt, stopWatch.elapsedTime, { result });
+            sendKernelTelemetryEvent(this.kernel.resourceUri, Telemetry.NotebookInterrupt, stopWatch.elapsedTime, {
+                result
+            });
             return result;
         });
     }
-    private addKernelRestartHandler(kernel: IKernel, document: NotebookDocument) {
-        if (this.kernelRestartHandlerAdded.has(kernel)) {
-            return;
-        }
-        this.kernelRestartHandlerAdded.add(kernel);
-        traceInfo('Hooked up kernel restart handler');
-        kernel.onRestarted(
-            () => {
-                // We're only interested in restarts of the kernel associated with this document.
-                const executionQueue = this.documentExecutions.get(document);
-                if (kernel !== this.kernelProvider.get(document.uri) || !executionQueue) {
-                    return;
-                }
 
-                traceInfo('Cancel all executions as Kernel was restarted');
-                return executionQueue.cancel(true);
-            },
-            this,
-            this.disposables
-        );
-    }
-    private async getKernel(document: NotebookDocument): Promise<IKernel> {
-        let kernel = this.kernelProvider.get(document.uri);
-        if (!kernel) {
-            kernel = this.kernelProvider.getOrCreate(document.uri, { metadata: this.metadata });
-        }
-        if (!kernel) {
-            throw new Error('Unable to create a Kernel to run cell');
-        }
-        await kernel.start({ document });
-        return kernel;
+    @captureTelemetry(Telemetry.RestartKernel)
+    @captureTelemetry(Telemetry.RestartJupyterTime)
+    private async restartExecution(session: IJupyterSession): Promise<void> {
+        // Just use the internal session. Pending cells should have been canceled by the caller
+        await session.restart();
     }
 }

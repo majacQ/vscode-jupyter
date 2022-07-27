@@ -22,7 +22,6 @@ suite('Migrate data science settings', () => {
     const originalSettings = `{
     "python.dataScience.allowImportFromNotebook": true,
     "jupyter.allowImportFromNotebook": true,
-    "python.dataScience.alwaysTrustNotebooks": true,
     "python.dataScience.enabled": true,
     "python.dataScience.jupyterInterruptTimeout": 0,
     "python.dataScience.jupyterLaunchTimeout": 0,
@@ -51,7 +50,7 @@ suite('Migrate data science settings', () => {
     "python.dataScience.enableAutoMoveToNextCell": true,
     "python.dataScience.allowUnauthorizedRemoteConnection": true,
     "python.dataScience.askForKernelRestart": true,
-    "python.dataScience.enablePlotViewer": true,
+    "python.dataScience.generateSVGPlots": true,
     "python.dataScience.codeLenses": "python.dataScience.runcell, python.dataScience.runallcellsabove, python.dataScience.debugcell",
     "python.dataScience.debugCodeLenses": "python.dataScience.debugcontinue, python.dataScience.debugstop, python.dataScience.debugstepover",
     "python.dataScience.debugpyDistPath": "foo",
@@ -87,7 +86,6 @@ suite('Migrate data science settings', () => {
     "python.experiments.optOutFrom": [
         "DeprecatePythonPath - experiment"
     ],
-    "jupyter.alwaysTrustNotebooks": true,
     "jupyter.enabled": true,
     "jupyter.jupyterInterruptTimeout": 0,
     "jupyter.jupyterLaunchTimeout": 0,
@@ -116,7 +114,7 @@ suite('Migrate data science settings', () => {
     "jupyter.enableAutoMoveToNextCell": true,
     "jupyter.allowUnauthorizedRemoteConnection": true,
     "jupyter.askForKernelRestart": true,
-    "jupyter.enablePlotViewer": true,
+    "jupyter.generateSVGPlots": true,
     "jupyter.codeLenses": "jupyter.runcell, jupyter.runallcellsabove, jupyter.debugcell",
     "jupyter.debugCodeLenses": "jupyter.debugcontinue, jupyter.debugstop, jupyter.debugstepover",
     "jupyter.debugpyDistPath": "foo",

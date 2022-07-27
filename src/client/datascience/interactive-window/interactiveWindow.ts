@@ -1,83 +1,90 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
-import type { nbformat } from '@jupyterlab/coreutils';
+import type * as nbformat from '@jupyterlab/nbformat';
 import * as path from 'path';
-import * as uuid from 'uuid';
-import { CancellationToken, Event, EventEmitter, Memento, Uri, ViewColumn } from 'vscode';
+import {
+    Event,
+    EventEmitter,
+    NotebookCell,
+    NotebookCellData,
+    NotebookCellKind,
+    NotebookDocument,
+    NotebookEditorRevealType,
+    NotebookRange,
+    Uri,
+    workspace,
+    WorkspaceEdit,
+    notebooks,
+    Position,
+    Range,
+    Selection,
+    commands,
+    TextEditorRevealType,
+    ViewColumn,
+    NotebookEditor,
+    Disposable,
+    window,
+    ThemeColor
+} from 'vscode';
 import { IPythonExtensionChecker } from '../../api/types';
 import {
     IApplicationShell,
     ICommandManager,
     IDocumentManager,
-    ILiveShareApi,
-    IWebviewPanelProvider,
     IWorkspaceService
 } from '../../common/application/types';
-import { ContextKey } from '../../common/contextKey';
+import { JVSC_EXTENSION_ID, MARKDOWN_LANGUAGE, PYTHON_LANGUAGE } from '../../common/constants';
 import '../../common/extensions';
-import { traceError } from '../../common/logger';
+import { traceInfo, traceInfoIfCI } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
+import * as uuid from 'uuid/v4';
 
-import {
-    IConfigurationService,
-    IDisposableRegistry,
-    InteractiveWindowMode,
-    IPersistentStateFactory,
-    Resource
-} from '../../common/types';
+import { IConfigurationService, IDisposableRegistry, InteractiveWindowMode, Resource } from '../../common/types';
 import { createDeferred, Deferred } from '../../common/utils/async';
-import * as localize from '../../common/utils/localize';
-import { EXTENSION_ROOT_DIR } from '../../constants';
-import { captureTelemetry, sendTelemetryEvent } from '../../telemetry';
-import { Commands, EditorContexts, Identifiers, Telemetry } from '../constants';
-import { IDataViewerFactory } from '../data-viewing/types';
+import { noop } from '../../common/utils/misc';
+import { generateCellsFromNotebookDocument } from '../cellFactory';
+import { CellMatcher } from '../cellMatcher';
+import { Commands, defaultNotebookFormat } from '../constants';
 import { ExportFormat, IExportDialog } from '../export/types';
-import { InteractiveBase } from '../interactive-common/interactiveBase';
-import {
-    INotebookIdentity,
-    InteractiveWindowMessages,
-    ISubmitNewCell,
-    NotebookModelChange,
-    SysInfoReason
-} from '../interactive-common/interactiveWindowTypes';
-import { KernelSelector } from '../jupyter/kernels/kernelSelector';
-import { KernelConnectionMetadata } from '../jupyter/kernels/types';
+import { InteractiveWindowMessages } from '../interactive-common/interactiveWindowTypes';
+import { IKernel, IKernelProvider, NotebookCellRunState } from '../jupyter/kernels/types';
+import { INotebookControllerManager } from '../notebook/types';
+import { VSCodeNotebookController } from '../notebook/vscodeNotebookController';
 import { updateNotebookMetadata } from '../notebookStorage/baseModel';
-import {
-    ICell,
-    ICodeCssGenerator,
-    IDataScienceErrorHandler,
-    IInteractiveWindow,
-    IInteractiveWindowInfo,
-    IInteractiveWindowListener,
-    IInteractiveWindowLoadable,
-    IInteractiveWindowProvider,
-    IJupyterDebugger,
-    IJupyterServerUriStorage,
-    IJupyterVariableDataProviderFactory,
-    IJupyterVariables,
-    INotebookExporter,
-    INotebookProvider,
-    IStatusProvider,
-    IThemeFinder,
-    WebViewViewChangeEventArgs
-} from '../types';
-import { createInteractiveIdentity, getInteractiveWindowTitle } from './identity';
+import { IInteractiveWindowLoadable, IInteractiveWindowDebugger, INotebookExporter } from '../types';
+import { getInteractiveWindowTitle } from './identity';
+import { generateMarkdownFromCodeLines } from '../../../datascience-ui/common';
+import { chainWithPendingUpdates } from '../notebook/helpers/notebookUpdater';
+import { LineQueryRegex, linkCommandAllowList } from '../interactive-common/linkProvider';
+import { INativeInteractiveWindow } from './types';
+import { generateInteractiveCode } from '../../../datascience-ui/common/cellFactory';
+import { initializeInteractiveOrNotebookTelemetryBasedOnUserAction } from '../telemetry/telemetry';
+import { InteractiveWindowView } from '../notebook/constants';
 
-const historyReactDir = path.join(EXTENSION_ROOT_DIR, 'out', 'datascience-ui', 'notebook');
-
-export class InteractiveWindow extends InteractiveBase implements IInteractiveWindowLoadable {
+type InteractiveCellMetadata = {
+    inputCollapsed: boolean;
+    interactiveWindowCellMarker: string;
+    interactive: {
+        file: string;
+        line: number;
+        originalSource: string;
+    };
+    id: string;
+};
+export function getInteractiveCellMetadata(cell: NotebookCell): InteractiveCellMetadata | undefined {
+    if (cell.metadata.interactive !== undefined) {
+        return cell.metadata as InteractiveCellMetadata;
+    }
+}
+export class InteractiveWindow implements IInteractiveWindowLoadable {
     public get onDidChangeViewState(): Event<void> {
         return this._onDidChangeViewState.event;
     }
-    public get visible(): boolean {
-        return this.viewState.visible;
+    // Promise that resolves when the interactive window is ready to handle code execution.
+    public get readyPromise(): Promise<void> {
+        return Promise.all([this._editorReadyPromise, this._kernelReadyPromise]).then(noop, noop);
     }
-    public get active(): boolean {
-        return this.viewState.active;
-    }
-
-    public get closed(): Event<IInteractiveWindow> {
+    public get closed(): Event<void> {
         return this.closedEvent.event;
     }
     public get owner(): Resource {
@@ -86,97 +93,49 @@ export class InteractiveWindow extends InteractiveBase implements IInteractiveWi
     public get submitters(): Uri[] {
         return this._submitters;
     }
-    public get identity(): Uri {
-        return this._identity;
+    public get notebookUri(): Uri | undefined {
+        return this._notebookDocument?.uri;
     }
-    public isInteractive = true;
+    public get notebookEditor(): NotebookEditor | undefined {
+        return this._notebookEditor;
+    }
+    public get notebookDocument(): NotebookDocument | undefined {
+        return this._notebookDocument;
+    }
     private _onDidChangeViewState = new EventEmitter<void>();
-    private closedEvent: EventEmitter<IInteractiveWindow> = new EventEmitter<IInteractiveWindow>();
-    private waitingForExportCells: boolean = false;
-    private trackedJupyterStart: boolean = false;
+    private closedEvent = new EventEmitter<void>();
     private _owner: Uri | undefined;
-    private _identity: Uri = createInteractiveIdentity();
     private _submitters: Uri[] = [];
-    private pendingHasCell = new Map<string, Deferred<boolean>>();
     private mode: InteractiveWindowMode = 'multiple';
-    private loadPromise: Promise<void>;
-    private _kernelConnection?: KernelConnectionMetadata;
+    private fileInKernel: string | undefined;
+    private cellMatcher;
+
+    private internalDisposables: Disposable[] = [];
+    private _editorReadyPromise: Promise<NotebookEditor>;
+    private _controllerReadyPromise: Deferred<VSCodeNotebookController>;
+    private _kernelReadyPromise: Promise<IKernel> | undefined;
+    private _notebookDocument: NotebookDocument | undefined;
+    private executionPromise: Promise<boolean> | undefined;
+    private _notebookEditor: NotebookEditor | undefined;
+    private _inputUri: Uri | undefined;
 
     constructor(
-        listeners: IInteractiveWindowListener[],
-        liveShare: ILiveShareApi,
-        applicationShell: IApplicationShell,
-        documentManager: IDocumentManager,
-        statusProvider: IStatusProvider,
-        provider: IWebviewPanelProvider,
-        disposables: IDisposableRegistry,
-        cssGenerator: ICodeCssGenerator,
-        themeFinder: IThemeFinder,
-        fs: IFileSystem,
-        configuration: IConfigurationService,
-        commandManager: ICommandManager,
-        jupyterExporter: INotebookExporter,
-        workspaceService: IWorkspaceService,
-        private interactiveWindowProvider: IInteractiveWindowProvider,
-        dataExplorerFactory: IDataViewerFactory,
-        jupyterVariableDataProviderFactory: IJupyterVariableDataProviderFactory,
-        jupyterVariables: IJupyterVariables,
-        jupyterDebugger: IJupyterDebugger,
-        errorHandler: IDataScienceErrorHandler,
-        private readonly stateFactory: IPersistentStateFactory,
-        globalStorage: Memento,
-        workspaceStorage: Memento,
-        notebookProvider: INotebookProvider,
-        useCustomEditorApi: boolean,
+        private readonly applicationShell: IApplicationShell,
+        private readonly documentManager: IDocumentManager,
+        private readonly fs: IFileSystem,
+        private readonly configuration: IConfigurationService,
+        private readonly commandManager: ICommandManager,
+        private readonly jupyterExporter: INotebookExporter,
+        private readonly workspaceService: IWorkspaceService,
         owner: Resource,
         mode: InteractiveWindowMode,
-        title: string | undefined,
-        selector: KernelSelector,
         private readonly extensionChecker: IPythonExtensionChecker,
-        serverStorage: IJupyterServerUriStorage,
-        private readonly exportDialog: IExportDialog
+        private readonly exportDialog: IExportDialog,
+        private readonly notebookControllerManager: INotebookControllerManager,
+        private readonly kernelProvider: IKernelProvider,
+        private readonly disposables: IDisposableRegistry,
+        private readonly interactiveWindowDebugger: IInteractiveWindowDebugger
     ) {
-        super(
-            listeners,
-            liveShare,
-            applicationShell,
-            documentManager,
-            provider,
-            disposables,
-            cssGenerator,
-            themeFinder,
-            statusProvider,
-            fs,
-            configuration,
-            jupyterExporter,
-            workspaceService,
-            dataExplorerFactory,
-            jupyterVariableDataProviderFactory,
-            jupyterVariables,
-            jupyterDebugger,
-            errorHandler,
-            commandManager,
-            globalStorage,
-            workspaceStorage,
-            historyReactDir,
-            [
-                path.join(historyReactDir, 'require.js'),
-                path.join(historyReactDir, 'ipywidgets.js'),
-                path.join(historyReactDir, 'monaco.bundle.js'),
-                path.join(historyReactDir, 'commons.initial.bundle.js'),
-                path.join(historyReactDir, 'interactiveWindow.js')
-            ],
-            localize.DataScience.interactiveWindowTitle(),
-            ViewColumn.Two,
-            notebookProvider,
-            useCustomEditorApi,
-            selector,
-            serverStorage
-        );
-
-        // Send a telemetry event to indicate window is opening
-        sendTelemetryEvent(Telemetry.OpenedInteractiveWindow);
-
         // Set our owner and first submitter
         this._owner = owner;
         this.mode = mode;
@@ -184,100 +143,237 @@ export class InteractiveWindow extends InteractiveBase implements IInteractiveWi
             this._submitters.push(owner);
         }
 
-        // When opening we have to load the web panel.
-        this.loadPromise = this.loadWebview(this.owner ? path.dirname(this.owner.fsPath) : process.cwd())
-            .then(async () => {
-                // Always load our notebook.
-                await this.ensureConnectionAndNotebook();
+        // Request creation of the interactive window from VS Code
+        this._editorReadyPromise = this.createEditorReadyPromise();
 
-                // Then the initial sys info
-                await this.addSysInfo(SysInfoReason.Start);
+        // Wait for a controller to get selected
+        this._controllerReadyPromise = createDeferred<VSCodeNotebookController>();
+
+        // Set up promise for kernel ready
+        this._kernelReadyPromise = this.createKernelReadyPromise();
+
+        workspace.onDidCloseNotebookDocument((notebookDocument) => {
+            if (notebookDocument === this._notebookDocument) {
+                this.closedEvent.fire();
+            }
+        }, this.internalDisposables);
+
+        this.cellMatcher = new CellMatcher(this.configuration.getSettings(this.owningResource));
+    }
+
+    private async createKernelReadyPromise(): Promise<IKernel> {
+        const editor = await this._editorReadyPromise;
+        const controller = await this._controllerReadyPromise.promise;
+        initializeInteractiveOrNotebookTelemetryBasedOnUserAction(this.owner, controller.connection);
+        const kernel = this.kernelProvider.getOrCreate(editor.document, {
+            metadata: controller.connection,
+            controller: controller.controller,
+            resourceUri: this.owner
+        });
+        kernel.onRestarted(
+            async () => {
+                traceInfoIfCI('Restart event handled in IW');
+                this.fileInKernel = undefined;
+                const promise = this.runIntialization(kernel, this.owner);
+                this._kernelReadyPromise = promise.then(() => kernel);
+                await promise;
+            },
+            this,
+            this.internalDisposables
+        );
+        this.internalDisposables.push(kernel);
+        await kernel.start();
+        this.fileInKernel = undefined;
+        await this.runIntialization(kernel, this.owner);
+        return kernel;
+    }
+
+    private async createEditorReadyPromise(): Promise<NotebookEditor> {
+        const preferredController = await this.notebookControllerManager.getActiveInterpreterOrDefaultController(
+            InteractiveWindowView,
+            this.owner
+        );
+        const controllerId = preferredController ? `${JVSC_EXTENSION_ID}/${preferredController.id}` : undefined;
+        traceInfo(`Starting interactive window with controller ID ${controllerId}`);
+        const hasOwningFile = this.owner !== undefined;
+        const { inputUri, notebookEditor } = ((await this.commandManager.executeCommand(
+            'interactive.open',
+            // Keep focus on the owning file if there is one
+            { viewColumn: ViewColumn.Beside, preserveFocus: hasOwningFile },
+            undefined,
+            controllerId,
+            this.owner && this.mode === 'perFile' ? getInteractiveWindowTitle(this.owner) : undefined
+        )) as unknown) as INativeInteractiveWindow;
+        if (!notebookEditor) {
+            // This means VS Code failed to create an interactive window.
+            // This should never happen.
+            throw new Error('Failed to request creation of interactive window from VS Code.');
+        }
+        this._notebookEditor = notebookEditor;
+        this._notebookDocument = notebookEditor.document;
+        this._inputUri = inputUri;
+        this.internalDisposables.push(
+            window.onDidChangeActiveNotebookEditor((e) => {
+                if (e === this._notebookEditor) {
+                    this._onDidChangeViewState.fire();
+                }
             })
-            .catch((e) => this.errorHandler.handleError(e));
+        );
+        this.listenForControllerSelection(notebookEditor.document);
+        this.initializeRendererCommunication();
+        return notebookEditor;
+    }
 
-        // Update the title if possible
-        if (this.owner && mode === 'perFile') {
-            this.setTitle(getInteractiveWindowTitle(this.owner));
-        } else if (title) {
-            this.setTitle(title);
+    private initializeRendererCommunication() {
+        const messageChannel = notebooks.createRendererMessaging('jupyter-error-renderer');
+        this.disposables.push(
+            messageChannel.onDidReceiveMessage(async (e) => {
+                const message = e.message;
+                if (message.message === InteractiveWindowMessages.OpenLink) {
+                    const href = message.payload;
+                    if (href.startsWith('file')) {
+                        await this.openFile(href);
+                    } else if (href.startsWith('https://command:')) {
+                        const temp: string = href.split(':')[2];
+                        const params: string[] = temp.includes('/?') ? temp.split('/?')[1].split(',') : [];
+                        let command = temp.split('/?')[0];
+                        if (command.endsWith('/')) {
+                            command = command.substring(0, command.length - 1);
+                        }
+                        if (linkCommandAllowList.includes(command)) {
+                            await commands.executeCommand(command, params);
+                        }
+                    } else {
+                        this.applicationShell.openUrl(href);
+                    }
+                }
+            })
+        );
+    }
+
+    private async openFile(fileUri: string) {
+        const uri = Uri.parse(fileUri);
+        let selection: Range = new Range(new Position(0, 0), new Position(0, 0));
+        if (uri.query) {
+            // Might have a line number query on the file name
+            const lineMatch = LineQueryRegex.exec(uri.query);
+            if (lineMatch) {
+                const lineNumber = parseInt(lineMatch[1], 10);
+                selection = new Range(new Position(lineNumber, 0), new Position(lineNumber, 0));
+            }
+        }
+
+        // Show the matching editor if there is one
+        let editor = this.documentManager.visibleTextEditors.find((e) => this.fs.arePathsSame(e.document.uri, uri));
+        if (editor) {
+            return this.documentManager
+                .showTextDocument(editor.document, { selection, viewColumn: editor.viewColumn })
+                .then((e) => {
+                    e.revealRange(selection, TextEditorRevealType.InCenter);
+                });
+        } else {
+            // Not a visible editor, try opening otherwise
+            return this.commandManager.executeCommand('vscode.open', uri).then(() => {
+                // See if that opened a text document
+                editor = this.documentManager.visibleTextEditors.find((e) => this.fs.arePathsSame(e.document.uri, uri));
+                if (editor) {
+                    // Force the selection to change
+                    editor.revealRange(selection);
+                    editor.selection = new Selection(selection.start, selection.start);
+                }
+            });
         }
     }
 
-    public async show(preserveFocus: boolean = true): Promise<void> {
-        await this.loadPromise;
-        return super.show(preserveFocus);
+    private registerControllerChangeListener(controller: VSCodeNotebookController, notebookDocument: NotebookDocument) {
+        const controllerChangeListener = controller.controller.onDidChangeSelectedNotebooks(
+            (selectedEvent: { notebook: NotebookDocument; selected: boolean }) => {
+                // Controller was deselected for this InteractiveWindow's NotebookDocument
+                if (selectedEvent.selected === false && selectedEvent.notebook === notebookDocument) {
+                    this._controllerReadyPromise = createDeferred<VSCodeNotebookController>();
+                    this._kernelReadyPromise = undefined;
+                    this.executionPromise = undefined;
+                    controllerChangeListener.dispose();
+                }
+            },
+            this,
+            this.internalDisposables
+        );
+    }
+
+    private listenForControllerSelection(notebookDocument: NotebookDocument) {
+        const controller = this.notebookControllerManager.getSelectedNotebookController(notebookDocument);
+        if (controller !== undefined) {
+            this.registerControllerChangeListener(controller, notebookDocument);
+            this._controllerReadyPromise.resolve(controller);
+        }
+
+        // Ensure we hear about any controller changes so we can update our cached promises
+        this.notebookControllerManager.onNotebookControllerSelected(
+            (e: { notebook: NotebookDocument; controller: VSCodeNotebookController }) => {
+                if (e.notebook !== notebookDocument) {
+                    return;
+                }
+
+                // Clear cached kernel when the selected controller for this document changes
+                this.registerControllerChangeListener(e.controller, notebookDocument);
+                this._controllerReadyPromise.resolve(e.controller);
+
+                // Recreate the kernel ready promise now that we have a new controller
+                this._kernelReadyPromise = this.createKernelReadyPromise();
+            },
+            this,
+            this.internalDisposables
+        );
+    }
+
+    public async show(): Promise<void> {
+        await this.commandManager.executeCommand(
+            'interactive.open',
+            { preserveFocus: true },
+            this.notebookUri,
+            undefined,
+            undefined
+        );
+    }
+
+    public get inputUri() {
+        return this._inputUri;
     }
 
     public dispose() {
-        super.dispose();
-        if (this.notebook) {
-            this.notebook.dispose().ignoreErrors();
-        }
-        if (this.closedEvent) {
-            this.closedEvent.fire(this);
-        }
+        this.internalDisposables.forEach((d) => d.dispose());
     }
 
-    public addMessage(message: string): Promise<void> {
-        this.addMessageImpl(message);
-        return Promise.resolve();
+    // Add message to the notebook document in a markdown cell
+    public async addMessage(message: string): Promise<void> {
+        const notebookEditor = await this._editorReadyPromise;
+        const edit = new WorkspaceEdit();
+        const markdownCell = new NotebookCellData(NotebookCellKind.Markup, message, MARKDOWN_LANGUAGE);
+        markdownCell.metadata = { isInteractiveWindowMessageCell: true };
+        edit.replaceNotebookCells(
+            notebookEditor.document.uri,
+            new NotebookRange(notebookEditor.document.cellCount, notebookEditor.document.cellCount),
+            [markdownCell]
+        );
+        await workspace.applyEdit(edit);
     }
 
     public changeMode(mode: InteractiveWindowMode): void {
         if (this.mode !== mode) {
             this.mode = mode;
-            if (this.owner && mode === 'perFile') {
-                this.setTitle(getInteractiveWindowTitle(this.owner));
-            }
         }
     }
 
     public async addCode(code: string, file: Uri, line: number): Promise<boolean> {
-        return this.addOrDebugCode(code, file, line, false);
+        return this.submitCodeImpl(code, file, line, false);
     }
 
-    public exportCells() {
-        // First ask for all cells. Set state to indicate waiting for result
-        this.waitingForExportCells = true;
-
-        // Telemetry will fire when the export function is called.
-        this.postMessage(InteractiveWindowMessages.GetAllCells).ignoreErrors();
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    public onMessage(message: string, payload: any) {
-        super.onMessage(message, payload);
-
-        switch (message) {
-            case InteractiveWindowMessages.Export:
-                this.handleMessage(message, payload, this.export);
-                break;
-
-            case InteractiveWindowMessages.ReturnAllCells:
-                this.handleMessage(message, payload, this.handleReturnAllCells);
-                break;
-
-            case InteractiveWindowMessages.UpdateModel:
-                this.handleMessage(message, payload, this.handleModelChange);
-                break;
-
-            case InteractiveWindowMessages.ExportNotebookAs:
-                this.handleMessage(message, payload, this.exportAs);
-                break;
-
-            case InteractiveWindowMessages.HasCellResponse:
-                this.handleMessage(message, payload, this.handleHasCellResponse);
-                break;
-
-            default:
-                break;
-        }
-    }
-
-    public async debugCode(code: string, file: Uri, line: number): Promise<boolean> {
+    public async debugCode(code: string, fileUri: Uri, line: number): Promise<boolean> {
         let saved = true;
+        const file = fileUri.fsPath;
         // Make sure the file is saved before debugging
-        const doc = this.documentManager.textDocuments.find((d) => this.fs.areLocalPathsSame(d.fileName, file.fsPath));
+        const doc = this.documentManager.textDocuments.find((d) => this.fs.areLocalPathsSame(d.fileName, file));
         if (doc && doc.isUntitled) {
             // Before we start, get the list of documents
             const beforeSave = [...this.documentManager.textDocuments];
@@ -289,49 +385,186 @@ export class InteractiveWindow extends InteractiveBase implements IInteractiveWi
             if (saved) {
                 const diff = this.documentManager.textDocuments.filter((f) => beforeSave.indexOf(f) === -1);
                 if (diff && diff.length > 0) {
-                    file = diff[0].uri;
+                    fileUri = diff[0].uri;
 
                     // Open the new document
-                    await this.documentManager.openTextDocument(file);
+                    await this.documentManager.openTextDocument(fileUri);
                 }
             }
         }
 
+        let result = true;
+
         // Call the internal method if we were able to save
         if (saved) {
-            return this.addOrDebugCode(code, file, line, true);
+            return this.submitCodeImpl(code, fileUri, line, true);
         }
 
-        return false;
+        return result;
     }
 
-    @captureTelemetry(Telemetry.ExpandAll)
-    public expandAllCells() {
-        this.postMessage(InteractiveWindowMessages.ExpandAll).ignoreErrors();
-    }
-
-    @captureTelemetry(Telemetry.CollapseAll)
-    public collapseAllCells() {
-        this.postMessage(InteractiveWindowMessages.CollapseAll).ignoreErrors();
-    }
-
-    @captureTelemetry(Telemetry.ScrolledToCell)
-    public scrollToCell(id: string): void {
-        this.show(false)
-            .then(() => {
-                return this.postMessage(InteractiveWindowMessages.ScrollToCell, { id });
-            })
-            .ignoreErrors();
-    }
-
-    public hasCell(id: string): Promise<boolean> {
-        let deferred = this.pendingHasCell.get(id);
-        if (!deferred) {
-            deferred = createDeferred<boolean>();
-            this.pendingHasCell.set(id, deferred);
-            this.postMessage(InteractiveWindowMessages.HasCell, id).ignoreErrors();
+    private async submitCodeImpl(code: string, fileUri: Uri, line: number, isDebug: boolean) {
+        // Do not execute or render empty cells
+        if (this.cellMatcher.stripFirstMarker(code).trim().length === 0) {
+            return true;
         }
-        return deferred.promise;
+        // Chain execution promises so that cells are executed in the right order
+        if (this.executionPromise) {
+            this.executionPromise = this.executionPromise.then(() =>
+                this.createExecutionPromise(code, fileUri, line, isDebug)
+            );
+        } else {
+            this.executionPromise = this.createExecutionPromise(code, fileUri, line, isDebug);
+        }
+        try {
+            return await this.executionPromise;
+        } catch (exc) {
+            // Rethrow, but clear execution promise so we can execute again
+            this.executionPromise = undefined;
+            throw exc;
+        }
+    }
+    private async createExecutionPromise(code: string, fileUri: Uri, line: number, isDebug: boolean) {
+        traceInfoIfCI('InteractiveWindow.ts.createExecutionPromise.start');
+        const [notebookEditor, kernel] = await Promise.all([
+            this._editorReadyPromise,
+            this._kernelReadyPromise,
+            this.updateOwners(fileUri)
+        ]);
+        const id = uuid();
+
+        // Compute isAtBottom based on last notebook cell before adding a notebook cell,
+        // since the notebook cell we're going to add is by definition not visible
+        const isLastCellVisible = notebookEditor?.visibleRanges.find((r) => {
+            return r.end === notebookEditor.document.cellCount - 1;
+        });
+        traceInfoIfCI('InteractiveWindow.ts.createExecutionPromise.before.AddNotebookCell');
+        const notebookCell = await this.addNotebookCell(notebookEditor.document, code, fileUri, line, id);
+        traceInfoIfCI('InteractiveWindow.ts.createExecutionPromise.after.AddNotebookCell');
+        const settings = this.configuration.getSettings(this.owningResource);
+        // The default behavior is to scroll to the last cell if the user is already at the bottom
+        // of the history, but not to scroll if the user has scrolled somewhere in the middle
+        // of the history. The jupyter.alwaysScrollOnNewCell setting overrides this to always scroll
+        // to newly-inserted cells.
+        if (settings.alwaysScrollOnNewCell || isLastCellVisible) {
+            this.revealCell(notebookCell, notebookEditor, false);
+        }
+
+        if (!kernel) {
+            return false;
+        }
+        let result = true;
+        let kernelBeginDisposable = undefined;
+        try {
+            // If debugging attach to the kernel but don't enable tracing just yet
+            if (isDebug) {
+                await this.interactiveWindowDebugger.attach(kernel!);
+
+                // Enable has to happen after the hidden code so that we don't hit breakpoints from previous cells
+                // Example:
+                // User has breakpoint on previous cell with name <ipython-2-hashystuff>
+                // We turn on tracing
+                // Hidden cell executes to set next cell to name <ipython-3-hashyotherstuff>
+                // Breakpoint fires in <ipython-2-hashystuff> because hidden cell inherits that value.
+                // So we have to enable tracing after we send the hidden cell.
+                kernelBeginDisposable = kernel.onPreExecute((c) => {
+                    if (c === notebookCell) {
+                        this.interactiveWindowDebugger.enable(kernel);
+                    }
+                });
+            }
+            traceInfoIfCI('InteractiveWindow.ts.createExecutionPromise.kernel.executeCell');
+            result = (await kernel!.executeCell(notebookCell)) !== NotebookCellRunState.Error;
+
+            traceInfo(`Finished execution for ${id}`);
+        } finally {
+            if (isDebug) {
+                await this.interactiveWindowDebugger.detach(kernel!);
+            }
+            if (kernelBeginDisposable) {
+                kernelBeginDisposable.dispose();
+            }
+        }
+        return result;
+    }
+    private async runIntialization(kernel: IKernel, fileUri: Resource) {
+        if (!fileUri) {
+            traceInfoIfCI('Unable to run initialization for IW');
+            return;
+        }
+
+        // If the file isn't unknown, set the active kernel's __file__ variable to point to that same file.
+        await this.setFileInKernel(fileUri.fsPath, kernel!);
+        traceInfoIfCI('file in kernel set for IW');
+    }
+
+    public async expandAllCells() {
+        const notebookEditor = await this._editorReadyPromise;
+        const edit = new WorkspaceEdit();
+        notebookEditor.document.getCells().forEach((cell, index) => {
+            const metadata = {
+                ...(cell.metadata || {}),
+                inputCollapsed: false,
+                outputCollapsed: false
+            };
+            edit.replaceNotebookCellMetadata(notebookEditor.document.uri, index, metadata);
+        });
+        await workspace.applyEdit(edit);
+    }
+
+    public async collapseAllCells() {
+        const notebookEditor = await this._editorReadyPromise;
+        const edit = new WorkspaceEdit();
+        notebookEditor.document.getCells().forEach((cell, index) => {
+            if (cell.kind !== NotebookCellKind.Code) {
+                return;
+            }
+            const metadata = { ...(cell.metadata || {}), inputCollapsed: true, outputCollapsed: false };
+            edit.replaceNotebookCellMetadata(notebookEditor.document.uri, index, metadata);
+        });
+        await workspace.applyEdit(edit);
+    }
+
+    public async scrollToCell(id: string): Promise<void> {
+        const notebookEditor = await this._editorReadyPromise;
+        const matchingCell = notebookEditor.document
+            .getCells()
+            .find((cell) => getInteractiveCellMetadata(cell)?.id === id);
+        if (matchingCell) {
+            this.revealCell(matchingCell, notebookEditor, true);
+        }
+    }
+
+    private revealCell(notebookCell: NotebookCell, notebookEditor: NotebookEditor, useDecoration: boolean) {
+        const notebookRange = new NotebookRange(notebookCell.index, notebookCell.index + 1);
+        const decorationType = useDecoration
+            ? notebooks.createNotebookEditorDecorationType({
+                  backgroundColor: new ThemeColor('peekViewEditor.background'),
+                  top: {}
+              })
+            : undefined;
+        // This will always try to reveal the whole cell--input + output combined
+        setTimeout(() => {
+            notebookEditor.revealRange(notebookRange, NotebookEditorRevealType.Default);
+
+            // Also add a decoration to make it look highlighted (peek background color)
+            if (decorationType) {
+                notebookEditor.setDecorations(decorationType, notebookRange);
+
+                // Fire another timeout to dispose of the decoration
+                setTimeout(() => {
+                    decorationType.dispose();
+                }, 2000);
+            }
+        }, 200); // Rendering output is async so the output is not guaranteed to immediately exist
+    }
+
+    public async hasCell(id: string): Promise<boolean> {
+        const notebookEditor = await this._editorReadyPromise;
+        if (!notebookEditor) {
+            return false;
+        }
+        return notebookEditor.document.getCells().some((cell) => getInteractiveCellMetadata(cell)?.id === id);
     }
 
     public get owningResource(): Resource {
@@ -345,146 +578,31 @@ export class InteractiveWindow extends InteractiveBase implements IInteractiveWi
         return undefined;
     }
 
-    protected async addSysInfo(reason: SysInfoReason): Promise<void> {
-        await super.addSysInfo(reason);
-
-        // If `reason == Start`, then this means UI has been updated with the last
-        // pience of informaiotn (which was sys info), and now UI can be deemed as having been loaded.
-        // Marking a UI as having been loaded is done by sending a message `LoadAllCells`, even though we're not loading any cells.
-        // We're merely using existing messages (from NativeEditor).
-        if (reason === SysInfoReason.Start) {
-            this.postMessage(InteractiveWindowMessages.LoadAllCells, { cells: [] }).ignoreErrors();
-        }
-    }
-    protected async onViewStateChanged(args: WebViewViewChangeEventArgs) {
-        super.onViewStateChanged(args);
-        this._onDidChangeViewState.fire();
-    }
-
-    @captureTelemetry(Telemetry.SubmitCellThroughInput, undefined, false)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    protected submitNewCell(info: ISubmitNewCell) {
-        // If there's any payload, it has the code and the id
-        if (info && info.code && info.id) {
-            // Send to ourselves.
-            this.submitCode(info.code, Identifiers.EmptyFileName, 0, info.id).ignoreErrors();
-
-            // Activate the other side, and send as if came from a file
-            this.interactiveWindowProvider
-                .synchronize(this)
-                .then((_v) => {
-                    this.shareMessage(InteractiveWindowMessages.RemoteAddCode, {
-                        code: info.code,
-                        file: Identifiers.EmptyFileName,
-                        line: 0,
-                        id: info.id,
-                        originator: this.id,
-                        debug: false
-                    });
-                })
-                .ignoreErrors();
-        }
-    }
-
-    protected get notebookMetadata(): Readonly<nbformat.INotebookMetadata> | undefined {
-        return undefined;
-    }
-    protected get kernelConnection(): Readonly<KernelConnectionMetadata> | undefined {
-        return this._kernelConnection;
-    }
-
-    protected async updateNotebookOptions(kernelConnection: KernelConnectionMetadata): Promise<void> {
-        this._kernelConnection = kernelConnection;
-    }
-
-    protected get notebookIdentity(): INotebookIdentity {
-        // Use this identity for the lifetime of the notebook
-        return {
-            resource: this._identity,
-            type: 'interactive'
-        };
-    }
-
-    protected updateContexts(info: IInteractiveWindowInfo | undefined) {
-        // This should be called by the python interactive window every
-        // time state changes. We use this opportunity to update our
-        // extension contexts
-        if (this.commandManager && this.commandManager.executeCommand) {
-            const interactiveContext = new ContextKey(EditorContexts.HaveInteractive, this.commandManager);
-            interactiveContext.set(!this.isDisposed).catch();
-            const interactiveCellsContext = new ContextKey(EditorContexts.HaveInteractiveCells, this.commandManager);
-            const redoableContext = new ContextKey(EditorContexts.HaveRedoableCells, this.commandManager);
-            const hasCellSelectedContext = new ContextKey(EditorContexts.HaveCellSelected, this.commandManager);
-            if (info) {
-                interactiveCellsContext.set(info.cellCount > 0).catch();
-                redoableContext.set(info.redoCount > 0).catch();
-                hasCellSelectedContext.set(info.selectedCell ? true : false).catch();
-            } else {
-                interactiveCellsContext.set(false).catch();
-                redoableContext.set(false).catch();
-                hasCellSelectedContext.set(false).catch();
-            }
-        }
-    }
-
-    protected async closeBecauseOfFailure(_exc: Error): Promise<void> {
-        this.dispose();
-    }
-
-    protected async setFileInKernel(file: string, cancelToken: CancellationToken | undefined): Promise<void> {
+    private async setFileInKernel(file: string, kernel: IKernel): Promise<void> {
         // If in perFile mode, set only once
-        if (this.mode === 'perFile' && !this.fileInKernel && this.notebook && file !== Identifiers.EmptyFileName) {
+        if (this.mode === 'perFile' && !this.fileInKernel) {
+            traceInfoIfCI(`Initializing __file__ in setFileInKernel with ${file} for mode ${this.mode}`);
             this.fileInKernel = file;
-            await this.notebook.execute(
-                `__file__ = '${file.replace(/\\/g, '\\\\')}'`,
-                file,
-                0,
-                uuid(),
-                cancelToken,
-                true
-            );
+            await kernel.executeHidden(`__file__ = '${file.replace(/\\/g, '\\\\')}'`);
         } else if (
             (!this.fileInKernel || !this.fs.areLocalPathsSame(this.fileInKernel, file)) &&
-            this.mode !== 'perFile' &&
-            this.notebook &&
-            file !== Identifiers.EmptyFileName
+            this.mode !== 'perFile'
         ) {
+            traceInfoIfCI(`Initializing __file__ in setFileInKernel with ${file} for mode ${this.mode}`);
             // Otherwise we need to reset it every time
             this.fileInKernel = file;
-            await this.notebook.execute(
-                `__file__ = '${file.replace(/\\/g, '\\\\')}'`,
-                file,
-                0,
-                uuid(),
-                cancelToken,
-                true
+            await kernel.executeHidden(`__file__ = '${file.replace(/\\/g, '\\\\')}'`);
+        } else {
+            traceInfoIfCI(
+                `Not Initializing __file__ in setFileInKernel with ${file} for mode ${this.mode} currently ${this.fileInKernel}`
             );
         }
     }
 
-    protected ensureConnectionAndNotebook(): Promise<void> {
-        // Keep track of users who have used interactive window in a worksapce folder.
-        // To be used if/when changing workflows related to startup of jupyter.
-        if (!this.trackedJupyterStart) {
-            this.trackedJupyterStart = true;
-            const store = this.stateFactory.createGlobalPersistentState('INTERACTIVE_WINDOW_USED', false);
-            store.updateValue(true).ignoreErrors();
-        }
-        return super.ensureConnectionAndNotebook();
-    }
-
-    private async addOrDebugCode(code: string, file: Uri, line: number, debug: boolean): Promise<boolean> {
-        if (this.owner && !this.fs.areLocalPathsSame(file.fsPath, this.owner.fsPath)) {
-            sendTelemetryEvent(Telemetry.NewFileForInteractiveWindow);
-        }
+    private async updateOwners(file: Uri) {
         // Update the owner for this window if not already set
         if (!this._owner) {
             this._owner = file;
-
-            // Update the title if we're in per file mode
-            if (this.mode === 'perFile') {
-                this.setTitle(getInteractiveWindowTitle(file));
-            }
         }
 
         // Add to the list of 'submitters' for this window.
@@ -494,55 +612,94 @@ export class InteractiveWindow extends InteractiveBase implements IInteractiveWi
 
         // Make sure our web panel opens.
         await this.show();
-
-        // Tell the webpanel about the new directory.
-        this.updateCwd(path.dirname(file.fsPath));
-
-        // Call the internal method.
-        return this.submitCode(code, file.fsPath, line, undefined, undefined, debug ? { runByLine: false } : undefined);
     }
 
-    @captureTelemetry(Telemetry.ExportNotebookInteractive, undefined, false)
+    private async addNotebookCell(
+        notebookDocument: NotebookDocument,
+        code: string,
+        file: Uri,
+        line: number,
+        id: string
+    ): Promise<NotebookCell> {
+        // ensure editor is opened but not focused
+        await this.commandManager.executeCommand(
+            'interactive.open',
+            { preserveFocus: true },
+            notebookDocument.uri,
+            this.notebookControllerManager.getSelectedNotebookController(notebookDocument)?.id,
+            undefined
+        );
+
+        // Strip #%% and store it in the cell metadata so we can reconstruct the cell structure when exporting to Python files
+        const settings = this.configuration.getSettings(this.owningResource);
+        const isMarkdown = this.cellMatcher.getCellType(code) === MARKDOWN_LANGUAGE;
+        const strippedCode = isMarkdown
+            ? generateMarkdownFromCodeLines(code.splitLines()).join('')
+            : generateInteractiveCode(code, settings, this.cellMatcher);
+        const interactiveWindowCellMarker = this.cellMatcher.getFirstMarker(code);
+
+        // Insert cell into NotebookDocument
+        const language =
+            workspace.textDocuments.find((document) => document.uri.toString() === this.owner?.toString())
+                ?.languageId ?? PYTHON_LANGUAGE;
+        const notebookCellData = new NotebookCellData(
+            isMarkdown ? NotebookCellKind.Markup : NotebookCellKind.Code,
+            strippedCode,
+            isMarkdown ? MARKDOWN_LANGUAGE : language
+        );
+        notebookCellData.metadata = <InteractiveCellMetadata>{
+            inputCollapsed: !isMarkdown && settings.collapseCellInputCodeByDefault,
+            interactiveWindowCellMarker,
+            interactive: {
+                file: file.fsPath,
+                line: line,
+                originalSource: code
+            },
+            id: id
+        };
+        await chainWithPendingUpdates(notebookDocument, (edit) => {
+            edit.replaceNotebookCells(
+                notebookDocument.uri,
+                new NotebookRange(notebookDocument.cellCount, notebookDocument.cellCount),
+                [notebookCellData]
+            );
+        });
+        return notebookDocument.cellAt(notebookDocument.cellCount - 1);
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any, no-empty,@typescript-eslint/no-empty-function
-    private async export(cells: ICell[]) {
+    public async export() {
+        const notebookEditor = await this._editorReadyPromise;
         // Export requires the python extension
         if (!this.extensionChecker.isPythonExtensionInstalled) {
             return this.extensionChecker.showPythonExtensionInstallRequiredPrompt();
         }
 
+        const { magicCommandsAsComments } = this.configuration.getSettings(this.owningResource);
+        const cells = generateCellsFromNotebookDocument(notebookEditor.document, magicCommandsAsComments);
+
         // Should be an array of cells
         if (cells && this.exportDialog) {
-            // Indicate busy
-            this.startProgress();
-            try {
-                // Bring up the export file dialog box
-                const uri = await this.exportDialog.showDialog(ExportFormat.ipynb, this.owningResource);
-                if (uri) {
-                    await this.jupyterExporter.exportToFile(cells, uri.fsPath);
-                }
-            } finally {
-                this.stopProgress();
+            // Bring up the export file dialog box
+            const uri = await this.exportDialog.showDialog(ExportFormat.ipynb, this.owningResource);
+            if (uri) {
+                await this.jupyterExporter.exportToFile(cells, uri.fsPath);
             }
         }
     }
 
-    private async exportAs(cells: ICell[]) {
+    public async exportAs() {
+        const kernel = await this._kernelReadyPromise;
         // Export requires the python extension
         if (!this.extensionChecker.isPythonExtensionInstalled) {
             return this.extensionChecker.showPythonExtensionInstallRequiredPrompt();
         }
 
         // Pull out the metadata from our active notebook
-        const metadata: nbformat.INotebookMetadata = { orig_nbformat: 3 };
-        if (this.notebook) {
-            updateNotebookMetadata(metadata, this.notebook?.getKernelConnection());
+        const metadata: nbformat.INotebookMetadata = { orig_nbformat: defaultNotebookFormat.major };
+        if (kernel) {
+            updateNotebookMetadata(metadata, kernel.kernelConnectionMetadata);
         }
-
-        // Turn the cells into a json object
-        const json = await this.jupyterExporter.translateToNotebook(cells, undefined, metadata.kernelspec);
-
-        // Turn this into a string
-        const contents = JSON.stringify(json, undefined, 4);
 
         let defaultFileName;
         if (this.submitters && this.submitters.length) {
@@ -551,39 +708,20 @@ export class InteractiveWindow extends InteractiveBase implements IInteractiveWi
         }
 
         // Then run the export command with these contents
-        this.commandManager.executeCommand(
-            Commands.Export,
-            contents,
-            this.owningResource,
-            defaultFileName,
-            this.notebook?.getMatchingInterpreter()
-        );
+        this.commandManager
+            .executeCommand(
+                Commands.Export,
+                this.notebookDocument,
+                defaultFileName,
+                kernel?.kernelConnectionMetadata.interpreter
+            )
+            .then(noop, noop);
     }
 
-    private handleModelChange(update: NotebookModelChange) {
-        // Send telemetry for delete and delete all. We don't send telemetry for the other updates yet
-        if (update.source === 'user') {
-            if (update.kind === 'remove_all') {
-                sendTelemetryEvent(Telemetry.DeleteAllCells);
-            } else if (update.kind === 'remove') {
-                sendTelemetryEvent(Telemetry.DeleteCell);
-            }
+    public get kernelPromise() {
+        if (this._kernelReadyPromise) {
+            return this._kernelReadyPromise;
         }
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    private handleReturnAllCells(cells: ICell[]) {
-        // See what we're waiting for.
-        if (this.waitingForExportCells) {
-            this.export(cells).catch((ex) => traceError('Error exporting:', ex));
-        }
-    }
-
-    private handleHasCellResponse(response: { id: string; result: boolean }) {
-        const deferred = this.pendingHasCell.get(response.id);
-        if (deferred) {
-            deferred.resolve(response.result);
-            this.pendingHasCell.delete(response.id);
-        }
+        return Promise.resolve(undefined);
     }
 }

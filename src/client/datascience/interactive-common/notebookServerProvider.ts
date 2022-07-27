@@ -3,9 +3,8 @@
 
 'use strict';
 
-import { nbformat } from '@jupyterlab/coreutils';
 import { inject, injectable } from 'inversify';
-import { CancellationToken, ConfigurationTarget, EventEmitter, Uri } from 'vscode';
+import { CancellationToken, ConfigurationTarget } from 'vscode';
 import { IApplicationShell } from '../../common/application/types';
 import { CancellationError, wrapCancellationTokens } from '../../common/cancellation';
 import { traceInfo } from '../../common/logger';
@@ -15,10 +14,8 @@ import { noop } from '../../common/utils/misc';
 import { IInterpreterService } from '../../interpreter/contracts';
 import { sendTelemetryEvent } from '../../telemetry';
 import { Identifiers, Settings, Telemetry } from '../constants';
-import { JupyterInstallError } from '../jupyter/jupyterInstallError';
-import { JupyterSelfCertsError } from '../jupyter/jupyterSelfCertsError';
-import { JupyterZMQBinariesNotFoundError } from '../jupyter/jupyterZMQBinariesNotFoundError';
-import { KernelConnectionMetadata } from '../jupyter/kernels/types';
+import { JupyterInstallError } from '../errors/jupyterInstallError';
+import { JupyterSelfCertsError } from '../errors/jupyterSelfCertsError';
 import { JupyterServerSelector } from '../jupyter/serverSelector';
 import { ProgressReporter } from '../progress/progressReporter';
 import {
@@ -26,7 +23,6 @@ import {
     IJupyterExecution,
     IJupyterServerProvider,
     IJupyterServerUriStorage,
-    INotebook,
     INotebookServer,
     INotebookServerOptions
 } from '../types';
@@ -35,7 +31,6 @@ import {
 export class NotebookServerProvider implements IJupyterServerProvider {
     private serverPromise: Promise<INotebookServer | undefined> | undefined;
     private allowingUI = false;
-    private _notebookCreated = new EventEmitter<{ identity: Uri; notebook: INotebook }>();
     constructor(
         @inject(ProgressReporter) private readonly progressReporter: ProgressReporter,
         @inject(IConfigurationService) private readonly configuration: IConfigurationService,
@@ -45,29 +40,18 @@ export class NotebookServerProvider implements IJupyterServerProvider {
         @inject(IJupyterServerUriStorage) private readonly serverUriStorage: IJupyterServerUriStorage,
         @inject(JupyterServerSelector) private serverSelector: JupyterServerSelector
     ) {}
-    public get onNotebookCreated() {
-        return this._notebookCreated.event;
-    }
-
     public async getOrCreateServer(
         options: GetServerOptions,
         token?: CancellationToken
     ): Promise<INotebookServer | undefined> {
-        const serverOptions = await this.getNotebookServerOptions(options);
+        const serverOptions = await this.getNotebookServerOptions(options.resource);
 
         // If we are just fetching or only want to create for local, see if exists
         if (options.getOnly || (options.localOnly && !serverOptions.uri)) {
             return this.jupyterExecution.getServer(serverOptions);
         } else {
             // Otherwise create a new server
-            return this.createServer(options, token).then((val) => {
-                // If we created a new server notify of our first time provider connection
-                if (val && options.onConnectionMade) {
-                    options.onConnectionMade();
-                }
-
-                return val;
-            });
+            return this.createServer(options, token);
         }
     }
 
@@ -81,7 +65,7 @@ export class NotebookServerProvider implements IJupyterServerProvider {
 
         if (!this.serverPromise) {
             // Start a server
-            this.serverPromise = this.startServer(options, token);
+            this.serverPromise = this.startServer(options.resource, token);
         }
         try {
             const value = await this.serverPromise;
@@ -93,15 +77,8 @@ export class NotebookServerProvider implements IJupyterServerProvider {
         }
     }
 
-    private async startServer(
-        options: {
-            resource: Resource;
-            metadata?: nbformat.INotebookMetadata;
-            kernelConnection?: KernelConnectionMetadata;
-        },
-        token?: CancellationToken
-    ): Promise<INotebookServer | undefined> {
-        const serverOptions = await this.getNotebookServerOptions(options);
+    private async startServer(resource: Resource, token?: CancellationToken): Promise<INotebookServer | undefined> {
+        const serverOptions = await this.getNotebookServerOptions(resource);
         traceInfo(`Checking for server existence.`);
 
         // If the URI is 'remote' then the encrypted storage is not working. Ask user again for server URI
@@ -194,9 +171,6 @@ export class NotebookServerProvider implements IJupyterServerProvider {
                 return true;
             }
         } catch (e) {
-            if (e instanceof JupyterZMQBinariesNotFoundError) {
-                throw e;
-            }
             const activeInterpreter = await this.interpreterService.getActiveInterpreter(undefined);
             // Can't find a usable interpreter, show the error.
             if (activeInterpreter) {
@@ -215,11 +189,7 @@ export class NotebookServerProvider implements IJupyterServerProvider {
         }
     }
 
-    private async getNotebookServerOptions(options: {
-        resource: Resource;
-        metadata?: nbformat.INotebookMetadata;
-        kernelConnection?: KernelConnectionMetadata;
-    }): Promise<INotebookServerOptions> {
+    private async getNotebookServerOptions(resource: Resource): Promise<INotebookServerOptions> {
         // Since there's one server per session, don't use a resource to figure out these settings
         let serverURI: string | undefined = await this.serverUriStorage.getUri();
         const useDefaultConfig: boolean | undefined = this.configuration.getSettings(undefined)
@@ -232,11 +202,9 @@ export class NotebookServerProvider implements IJupyterServerProvider {
 
         return {
             uri: serverURI,
-            resource: options.resource,
+            resource,
             skipUsingDefaultConfig: !useDefaultConfig,
             purpose: Identifiers.HistoryPurpose,
-            kernelConnection: options.kernelConnection,
-            metadata: options.metadata,
             allowUI: this.allowUI.bind(this)
         };
     }

@@ -28,15 +28,22 @@ export class MockOutputChannel implements vscode.OutputChannel {
     }
     // eslint-disable-next-line no-empty,@typescript-eslint/no-empty-function
     public dispose() {}
+    public replace(value: string) {
+        this.output = value;
+    }
 }
 
 export class MockStatusBarItem implements vscode.StatusBarItem {
+    public id!: string;
+    public name!: string;
     backgroundColor: vscode.ThemeColor | undefined;
-    accessibilityInformation?: vscode.AccessibilityInformation | undefined;
+    accessibilityInformation: vscode.AccessibilityInformation | undefined;
     public alignment!: vscode.StatusBarAlignment;
     public priority!: number;
     public text!: string;
     public tooltip!: string;
+    // Will merge with tooltip
+    public tooltip2: string | vscode.MarkdownString | undefined;
     public color!: string;
     public command!: string;
     // eslint-disable-next-line no-empty,@typescript-eslint/no-empty-function

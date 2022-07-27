@@ -8,6 +8,7 @@ import { IApplicationShell, IWorkspaceService } from '../../common/application/t
 import '../../common/extensions';
 import { traceError } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
+import { IPythonExecutionFactory } from '../../common/process/types';
 
 import {
     IConfigurationService,
@@ -23,7 +24,8 @@ import { IInterpreterService } from '../../interpreter/contracts';
 import { sendTelemetryEvent } from '../../telemetry';
 import { getTelemetrySafeHashedString } from '../../telemetry/helpers';
 import { Telemetry } from '../constants';
-import { ILocalResourceUriConverter, INotebook } from '../types';
+import { IKernel } from '../jupyter/kernels/types';
+import { ILocalResourceUriConverter } from '../types';
 import { CDNWidgetScriptSourceProvider } from './cdnWidgetScriptSourceProvider';
 import { LocalWidgetScriptSourceProvider } from './localWidgetScriptSourceProvider';
 import { RemoteWidgetScriptSourceProvider } from './remoteWidgetScriptSourceProvider';
@@ -49,7 +51,7 @@ export class IPyWidgetScriptSourceProvider implements IWidgetScriptSourceProvide
     private readonly userConfiguredCDNAtLeastOnce: IPersistentState<boolean>;
     private readonly neverWarnAboutScriptsNotFoundOnCDN: IPersistentState<boolean>;
     constructor(
-        private readonly notebook: INotebook,
+        private readonly kernel: IKernel,
         private readonly localResourceUriConverter: ILocalResourceUriConverter,
         private readonly fs: IFileSystem,
         private readonly interpreterService: IInterpreterService,
@@ -57,7 +59,8 @@ export class IPyWidgetScriptSourceProvider implements IWidgetScriptSourceProvide
         private readonly configurationSettings: IConfigurationService,
         private readonly workspaceService: IWorkspaceService,
         private readonly stateFactory: IPersistentStateFactory,
-        private readonly httpClient: IHttpClient
+        private readonly httpClient: IHttpClient,
+        private readonly factory: IPythonExecutionFactory
     ) {
         this.userConfiguredCDNAtLeastOnce = this.stateFactory.createGlobalPersistentState<boolean>(
             GlobalStateKeyToTrackIfUserConfiguredCDNAtLeastOnce,
@@ -166,19 +169,21 @@ export class IPyWidgetScriptSourceProvider implements IWidgetScriptSourceProvide
                 new CDNWidgetScriptSourceProvider(this.configurationSettings, this.localResourceUriConverter, this.fs)
             );
         }
-        if (this.notebook.connection && this.notebook.connection.localLaunch) {
+        const connection = this.kernel.connection;
+        if (!connection) {
+            //
+        } else if (connection.localLaunch) {
             scriptProviders.push(
                 new LocalWidgetScriptSourceProvider(
-                    this.notebook,
+                    this.kernel,
                     this.localResourceUriConverter,
                     this.fs,
-                    this.interpreterService
+                    this.interpreterService,
+                    this.factory
                 )
             );
         } else {
-            if (this.notebook.connection) {
-                scriptProviders.push(new RemoteWidgetScriptSourceProvider(this.notebook.connection, this.httpClient));
-            }
+            scriptProviders.push(new RemoteWidgetScriptSourceProvider(connection, this.httpClient));
         }
 
         this.scriptProviders = scriptProviders;

@@ -13,7 +13,7 @@ import { IInterpreterService } from '../../../interpreter/contracts';
 import { PythonEnvironment } from '../../../pythonEnvironments/info';
 import { sendTelemetryEvent } from '../../../telemetry';
 import { Telemetry } from '../../constants';
-import { JupyterInstallError } from '../jupyterInstallError';
+import { JupyterInstallError } from '../../errors/jupyterInstallError';
 import {
     JupyterInterpreterDependencyResponse,
     JupyterInterpreterDependencyService
@@ -181,7 +181,6 @@ export class JupyterInterpreterService {
                 defaultValue: undefined,
                 token
             });
-
             // First see if we can get interpreter details
             const interpreter = await Promise.race([
                 this.interpreterService.getInterpreterDetails(pythonPath, undefined),
@@ -222,7 +221,6 @@ export class JupyterInterpreterService {
         // Nothing saved found, so check our current interpreter
         if (!interpreter) {
             const currentInterpreter = await this.interpreterService.getActiveInterpreter(undefined);
-
             if (currentInterpreter) {
                 // If the current active interpreter has everything installed already just use that
                 if (await this.interpreterConfiguration.areDependenciesInstalled(currentInterpreter, token)) {

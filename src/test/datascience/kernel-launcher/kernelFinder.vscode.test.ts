@@ -12,6 +12,9 @@ import { ILocalKernelFinder } from '../../../client/datascience/kernel-launcher/
 import { IInterpreterService } from '../../../client/interpreter/contracts';
 import { IExtensionTestApi } from '../../common';
 import { initialize } from '../../initialize';
+import { traceInfo } from '../../../client/common/logger';
+import { areInterpreterPathsSame } from '../../../client/pythonEnvironments/info/interpreter';
+import { getDisplayPath } from '../../../client/common/platform/fs-paths';
 
 /* eslint-disable @typescript-eslint/no-explicit-any, no-invalid-this */
 suite('DataScience - Kernels Finder', () => {
@@ -25,6 +28,13 @@ suite('DataScience - Kernels Finder', () => {
         interpreterService = api.serviceContainer.get<IInterpreterService>(IInterpreterService);
         resourceToUse = Uri.file(path.join(workspace.workspaceFolders![0].uri.fsPath, 'test.ipynb'));
     });
+    setup(async function () {
+        traceInfo(`Start Test ${this.currentTest?.title}`);
+    });
+    teardown(async function () {
+        traceInfo(`Start Test ${this.currentTest?.title}`);
+    });
+
     test('Can list all kernels', async () => {
         const kernelSpecs = await kernelFinder.listKernels(resourceToUse);
         assert.isArray(kernelSpecs);
@@ -41,19 +51,40 @@ suite('DataScience - Kernels Finder', () => {
         const interpreter = await interpreterService.getActiveInterpreter(resourceToUse);
         const kernelSpec = await kernelFinder.findKernel(resourceToUse, {
             kernelspec: { display_name: 'foobar', name: 'foobar' },
-            orig_nbformat: 4
+            orig_nbformat: 4,
+            language_info: {
+                name: PYTHON_LANGUAGE
+            }
         });
-        assert.ok(kernelSpec);
-        assert.equal(kernelSpec?.interpreter?.path, interpreter?.path, 'No interpreter found');
+        if (!kernelSpec?.interpreter) {
+            throw new Error('Kernelspec & interpreter info should not be empty');
+        }
+
+        assert.isTrue(
+            areInterpreterPathsSame(kernelSpec.interpreter.path.toLowerCase(), interpreter?.path.toLocaleLowerCase()),
+            `No interpreter found, kernelspec interpreter is ${getDisplayPath(
+                kernelSpec.interpreter.path
+            )} but expected ${getDisplayPath(interpreter?.path)}`
+        );
     });
     test('Interpreter kernel returned if kernelspec metadata not provided', async () => {
         const interpreter = await interpreterService.getActiveInterpreter(resourceToUse);
         const kernelSpec = await kernelFinder.findKernel(resourceToUse, {
             kernelspec: undefined,
-            orig_nbformat: 4
+            orig_nbformat: 4,
+            language_info: {
+                name: PYTHON_LANGUAGE
+            }
         });
-        assert.ok(kernelSpec);
-        assert.equal(kernelSpec?.interpreter?.path, interpreter?.path, 'No interpreter found');
+        if (!kernelSpec?.interpreter) {
+            throw new Error('Kernelspec & interpreter info should not be empty');
+        }
+        assert.isTrue(
+            areInterpreterPathsSame(kernelSpec.interpreter.path.toLowerCase(), interpreter?.path.toLocaleLowerCase()),
+            `No interpreter found, kernelspec interpreter is ${getDisplayPath(
+                kernelSpec.interpreter.path
+            )} but expected ${getDisplayPath(interpreter?.path)}`
+        );
     });
     test('Can find a Python kernel based on language', async () => {
         const kernelSpec = await kernelFinder.findKernel(resourceToUse, {

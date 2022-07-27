@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 'use strict';
-import type { nbformat } from '@jupyterlab/coreutils';
+import type * as nbformat from '@jupyterlab/nbformat';
 import { inject, injectable } from 'inversify';
 import {
     CodeLens,
@@ -126,7 +126,11 @@ export class CodeWatcher implements ICodeWatcher {
         // Run the cell that matches the current cursor position.
         return this.runMatchingCell(this.documentManager.activeTextEditor.selection, false, true);
     }
-
+    public dispose() {
+        this.codeLensUpdatedEvent.dispose();
+        this.closeDocumentDisposable?.dispose(); // NOSONAR
+        this.updateRequiredDisposable?.dispose(); // NOSONAR
+    }
     @captureTelemetry(Telemetry.RunAllCells)
     public async runAllCells() {
         const runCellCommands = this.codeLenses.filter(
@@ -302,7 +306,7 @@ export class CodeWatcher implements ICodeWatcher {
             return;
         }
 
-        // Run the cell clicked. Advance if the cursor is inside this cell and we're allowed to
+        // Run the cell clicked. Advance if the cursor is inside this cell and we're allowed to.
         const advance =
             range.contains(this.documentManager.activeTextEditor.selection.start) &&
             this.configService.getSettings(this.documentManager.activeTextEditor.document.uri).enableAutoMoveToNextCell;
@@ -357,6 +361,7 @@ export class CodeWatcher implements ICodeWatcher {
         const cellMatcher = new CellMatcher();
         let index = 0;
         const cellDelineator = this.getDefaultCellMarker(editor.document.uri);
+        const { newCellOnRunLast } = this.configService.getSettings(this.documentManager.activeTextEditor.document.uri);
 
         if (editor) {
             void editor.edit((editBuilder) => {
@@ -373,7 +378,9 @@ export class CodeWatcher implements ICodeWatcher {
 
                 if (lastCell) {
                     index = editor.document.lineCount;
-                    editBuilder.insert(new Position(editor.document.lineCount, 0), `\n${cellDelineator}\n`);
+                    if (newCellOnRunLast) {
+                        editBuilder.insert(new Position(editor.document.lineCount, 0), `\n${cellDelineator}\n`);
+                    }
                 }
             });
         }
@@ -1005,7 +1012,7 @@ export class CodeWatcher implements ICodeWatcher {
             const message = localize.DataScience.cellStopOnErrorFormatMessage().format(leftCount.toString());
             try {
                 const activeInteractiveWindow = await this.interactiveWindowProvider.getOrCreate(file);
-                return activeInteractiveWindow.addMessage(message);
+                await activeInteractiveWindow.addMessage(message);
             } catch (err) {
                 await this.dataScienceErrorHandler.handleError(err);
             }

@@ -1,11 +1,10 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 'use strict';
-import type { JSONObject } from '@phosphor/coreutils';
+import type { JSONObject } from '@lumino/coreutils';
 import { inject, injectable, named } from 'inversify';
 
 import { CancellationToken, Event, EventEmitter } from 'vscode';
-import { ServerStatus } from '../../../datascience-ui/interactive-common/mainState';
 import { IDisposableRegistry } from '../../common/types';
 import { captureTelemetry } from '../../telemetry';
 import { Identifiers, Telemetry } from '../constants';
@@ -14,9 +13,9 @@ import {
     IJupyterVariable,
     IJupyterVariables,
     IJupyterVariablesRequest,
-    IJupyterVariablesResponse,
-    INotebook
+    IJupyterVariablesResponse
 } from '../types';
+import { IKernel } from './kernels/types';
 
 /**
  * This class provides variable data for showing in the interactive window or a notebook.
@@ -43,57 +42,43 @@ export class JupyterVariables implements IJupyterVariables {
 
     // IJupyterVariables implementation
     @captureTelemetry(Telemetry.VariableExplorerFetchTime, undefined, true)
-    public async getVariables(
-        request: IJupyterVariablesRequest,
-        notebook?: INotebook
-    ): Promise<IJupyterVariablesResponse> {
-        return (await this.getVariableHandler(notebook)).getVariables(request, notebook);
+    public async getVariables(request: IJupyterVariablesRequest, kernel?: IKernel): Promise<IJupyterVariablesResponse> {
+        return (await this.getVariableHandler()).getVariables(request, kernel);
     }
 
-    public async getFullVariable(variable: IJupyterVariable, notebook?: INotebook): Promise<IJupyterVariable> {
-        return (await this.getVariableHandler(notebook)).getFullVariable(variable, notebook);
+    public async getFullVariable(variable: IJupyterVariable, kernel?: IKernel): Promise<IJupyterVariable> {
+        return (await this.getVariableHandler()).getFullVariable(variable, kernel);
     }
 
     public async getMatchingVariable(
         name: string,
-        notebook?: INotebook,
+        kernel?: IKernel,
         cancelToken?: CancellationToken
     ): Promise<IJupyterVariable | undefined> {
-        return (await this.getVariableHandler(notebook)).getMatchingVariable(name, notebook, cancelToken);
+        return (await this.getVariableHandler()).getMatchingVariable(name, kernel, cancelToken);
     }
 
     public async getDataFrameInfo(
         targetVariable: IJupyterVariable,
-        notebook?: INotebook,
+        kernel?: IKernel,
         sliceExpression?: string,
         isRefresh?: boolean
     ): Promise<IJupyterVariable> {
-        return (await this.getVariableHandler(notebook)).getDataFrameInfo(
-            targetVariable,
-            notebook,
-            sliceExpression,
-            isRefresh
-        );
+        return (await this.getVariableHandler()).getDataFrameInfo(targetVariable, kernel, sliceExpression, isRefresh);
     }
 
     public async getDataFrameRows(
         targetVariable: IJupyterVariable,
         start: number,
         end: number,
-        notebook?: INotebook,
+        kernel?: IKernel,
         sliceExpression?: string
     ): Promise<JSONObject> {
-        return (await this.getVariableHandler(notebook)).getDataFrameRows(
-            targetVariable,
-            start,
-            end,
-            notebook,
-            sliceExpression
-        );
+        return (await this.getVariableHandler()).getDataFrameRows(targetVariable, start, end, kernel, sliceExpression);
     }
 
-    private async getVariableHandler(notebook?: INotebook): Promise<IJupyterVariables> {
-        if (this.debuggerVariables.active && (!notebook || notebook.status === ServerStatus.Busy)) {
+    private async getVariableHandler(): Promise<IJupyterVariables> {
+        if (this.debuggerVariables.active) {
             return this.debuggerVariables;
         }
 

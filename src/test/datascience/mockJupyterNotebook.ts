@@ -2,11 +2,9 @@
 // Licensed under the MIT License.
 'use strict';
 import { Kernel, KernelMessage } from '@jupyterlab/services';
-import { JSONObject } from '@phosphor/coreutils/lib/json';
+import { JSONObject } from '@lumino/coreutils';
 import { Observable } from 'rxjs/Observable';
-import { CancellationToken, Event, EventEmitter, Uri } from 'vscode';
-import { Resource } from '../../client/common/types';
-import { getDefaultInteractiveIdentity } from '../../client/datascience/interactive-window/identity';
+import { CancellationToken, Event, EventEmitter } from 'vscode';
 import { KernelConnectionMetadata } from '../../client/datascience/jupyter/kernels/types';
 import {
     ICell,
@@ -14,13 +12,11 @@ import {
     IJupyterSession,
     INotebook,
     INotebookCompletion,
-    INotebookExecutionLogger,
     INotebookProviderConnection,
     InterruptResult,
     KernelSocketInformation
 } from '../../client/datascience/types';
 import { PythonEnvironment } from '../../client/pythonEnvironments/info';
-import { ServerStatus } from '../../datascience-ui/interactive-common/mainState';
 import { noop } from '../core';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -29,26 +25,17 @@ export class MockJupyterNotebook implements INotebook {
     public get connection(): INotebookProviderConnection | undefined {
         return this.providerConnection;
     }
-    public get identity(): Uri {
-        return getDefaultInteractiveIdentity();
-    }
-    public get onSessionStatusChanged(): Event<ServerStatus> {
-        if (!this.onStatusChangedEvent) {
-            this.onStatusChangedEvent = new EventEmitter<ServerStatus>();
-        }
+    public get onSessionStatusChanged(): Event<KernelMessage.Status> {
         return this.onStatusChangedEvent.event;
     }
 
-    public get status(): ServerStatus {
-        return ServerStatus.Idle;
+    public get status(): KernelMessage.Status {
+        return 'idle';
     }
     public get session(): IJupyterSession {
         throw new Error('Method not implemented');
     }
 
-    public get resource(): Resource {
-        return Uri.file('foo.py');
-    }
     public get onKernelInterrupted(): Event<void> {
         return this.kernelInterrupted.event;
     }
@@ -58,12 +45,12 @@ export class MockJupyterNotebook implements INotebook {
     public onKernelRestarted = new EventEmitter<void>().event;
     public readonly disposed: boolean = false;
     private kernelInterrupted = new EventEmitter<void>();
-    private onStatusChangedEvent: EventEmitter<ServerStatus> | undefined;
+    private onStatusChangedEvent = new EventEmitter<KernelMessage.Status>();
 
     constructor(private providerConnection: INotebookProviderConnection | undefined) {
         noop();
     }
-    public async requestKernelInfo(): Promise<KernelMessage.IInfoReplyMsg> {
+    public async requestKernelInfo(): Promise<KernelMessage.IInfoReplyMsg | undefined> {
         return {
             channel: 'shell',
             content: {
@@ -93,6 +80,9 @@ export class MockJupyterNotebook implements INotebook {
     public clear(_id: string): void {
         noop();
     }
+    public async runInitialSetup(): Promise<void> {
+        noop();
+    }
     public executeObservable(_code: string, _f: string, _line: number): Observable<ICell[]> {
         throw new Error('Method not implemented');
     }
@@ -120,18 +110,6 @@ export class MockJupyterNotebook implements INotebook {
     public waitForIdle(): Promise<void> {
         throw new Error('Method not implemented');
     }
-    public setLaunchingFile(_file: string): Promise<void> {
-        throw new Error('Method not implemented');
-    }
-
-    public async setMatplotLibStyle(_useDark: boolean): Promise<void> {
-        noop();
-    }
-
-    public addLogger(_logger: INotebookExecutionLogger): void {
-        noop();
-    }
-
     public getSysInfo(): Promise<ICell | undefined> {
         return Promise.resolve(undefined);
     }
@@ -159,74 +137,11 @@ export class MockJupyterNotebook implements INotebook {
         return;
     }
 
-    public setKernelConnection(_spec: KernelConnectionMetadata, _timeout: number): Promise<void> {
-        return Promise.resolve();
-    }
-
-    public getLoggers(): INotebookExecutionLogger[] {
-        return [];
-    }
-
     public registerCommTarget(
         _targetName: string,
         _callback: (comm: Kernel.IComm, msg: KernelMessage.ICommOpenMsg) => void | PromiseLike<void>
     ) {
         noop();
-    }
-
-    public sendCommMessage(
-        buffers: (ArrayBuffer | ArrayBufferView)[],
-        content: { comm_id: string; data: JSONObject; target_name: string | undefined },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        metadata: any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        msgId: any
-    ): Kernel.IShellFuture<
-        KernelMessage.IShellMessage<'comm_msg'>,
-        KernelMessage.IShellMessage<KernelMessage.ShellMessageType>
-    > {
-        const shellMessage = KernelMessage.createMessage<KernelMessage.ICommMsgMsg<'shell'>>({
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            msgType: 'comm_msg',
-            channel: 'shell',
-            buffers,
-            content,
-            metadata,
-            msgId,
-            session: '1',
-            username: '1'
-        });
-
-        return {
-            done: Promise.resolve(undefined),
-            msg: shellMessage,
-            onReply: noop,
-            onIOPub: noop,
-            onStdin: noop,
-            registerMessageHook: noop,
-            removeMessageHook: noop,
-            sendInputReply: noop,
-            isDisposed: false,
-            dispose: noop
-        };
-    }
-
-    public requestCommInfo(
-        _content: KernelMessage.ICommInfoRequestMsg['content']
-    ): Promise<KernelMessage.ICommInfoReplyMsg> {
-        const shellMessage = KernelMessage.createMessage<KernelMessage.ICommInfoReplyMsg>({
-            msgType: 'comm_info_reply',
-            channel: 'shell',
-            content: {
-                status: 'ok'
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            } as any,
-            metadata: {},
-            session: '1',
-            username: '1'
-        });
-
-        return Promise.resolve(shellMessage);
     }
     public registerMessageHook(
         _msgId: string,

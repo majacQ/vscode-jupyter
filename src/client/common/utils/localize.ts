@@ -16,6 +16,7 @@ export namespace Common {
     export const canceled = localize('Common.canceled', 'Canceled');
     export const cancel = localize('Common.cancel', 'Cancel');
     export const ok = localize('Common.ok', 'Ok');
+    export const download = localize('Common.download', 'Download');
     export const gotIt = localize('Common.gotIt', 'Got it!');
     export const install = localize('Common.install', 'Install');
     export const reInstall = localize('Common.reInstall', 'Re-Install');
@@ -145,14 +146,18 @@ export namespace ExtensionSurveyBanner {
 }
 
 export namespace DataScience {
+    export const warnWhenSelectingKernelWithUnSupportedPythonVersion = localize(
+        'DataScience.warnWhenSelectingKernelWithUnSupportedPythonVersion',
+        'The version of Python associated with the selected kernel is no longer supported. Please consider selecting a different kernel.'
+    );
+    export const pythonExtensionRequiredToRunNotebook = localize(
+        'DataScience.pythonExtensionRequiredToRunNotebook',
+        'Python Extension required to run Python notebooks.'
+    );
+    export const customizeLayout = localize('DataScience.customizeLayout', 'Customize Layout');
     export const pythonExtensionRequired = localize(
         'DataScience.pythonExtensionRequired',
         'The Python extension is required to perform that task. Click Yes to open Python extension installation page.'
-    );
-
-    export const pythonExtensionRecommended = localize(
-        'DataScience.pythonExtensionRecommended',
-        'Installation of the Python Extension is strongly recommended when working with Python notebooks. For all features and the most seamless experience, would you like to install now?'
     );
 
     export const pythonExtensionInstalled = localize(
@@ -263,27 +268,27 @@ export namespace DataScience {
     );
     export const libraryRequiredToLaunchJupyterNotInstalled = localize(
         'DataScience.libraryRequiredToLaunchJupyterNotInstalled',
-        'Data Science library {0} is not installed.'
+        'Running cells requires {0}.'
     );
     export const librariesRequiredToLaunchJupyterNotInstalled = localize(
         'DataScience.librariesRequiredToLaunchJupyterNotInstalled',
-        'Data Science libraries {0} are not installed.'
+        'Running cells requires {0}.'
     );
     export const libraryRequiredToLaunchJupyterNotInstalledInterpreter = localize(
         'DataScience.libraryRequiredToLaunchJupyterNotInstalledInterpreter',
-        '{0} requires {1} to be installed.'
+        "Running cells with '{0}' requires {1}."
     );
     export const libraryRequiredToLaunchJupyterKernelNotInstalledInterpreter = localize(
         'DataScience.libraryRequiredToLaunchJupyterKernelNotInstalledInterpreter',
-        '{0} requires {1} to be installed.'
+        "Running cells with '{0}' requires {1}."
     );
     export const libraryRequiredToLaunchJupyterKernelNotInstalledInterpreterAndRequiresUpdate = localize(
         'DataScience.libraryRequiredToLaunchJupyterKernelNotInstalledInterpreterAndRequiresUpdate',
-        '{1} in {0} is not correctly installed or requires an update.'
+        "Running cells with '{0}' requires {1} installed or requires an update."
     );
     export const librariesRequiredToLaunchJupyterNotInstalledInterpreter = localize(
         'DataScience.librariesRequiredToLaunchJupyterNotInstalledInterpreter',
-        '{0} requires {1} to be installed.'
+        "Running cells with '{0}' requires {1}."
     );
     export const selectJupyterInterpreter = localize(
         'DataScience.selectJupyterInterpreter',
@@ -373,16 +378,35 @@ export namespace DataScience {
     );
     export const sessionStartFailedWithKernel = localize(
         'DataScience.sessionStartFailedWithKernel',
-        "Failed to start a session for the Kernel '{0}'. \nView Jupyter [log](command:{1}) for further details."
+        "Failed to start the Kernel '{0}'. \nView Jupyter [log](command:jupyter.viewOutput) for further details."
     );
-    export const kernelTimeout = localize(
-        'DataScience.kernelTimeout',
-        'Timed out waiting to get a heartbeat from kernel process. \nView Jupyter [log](command:{0}) for further details.'
+    export const failedToStartKernel = localize('DataScience.failedToStartKernel', 'Failed to start the Kernel.');
+    export const failedToRestartKernel = localize('DataScience.failedToRestartKernel', 'Failed to restart the Kernel.');
+    export const failedToInterruptKernel = localize(
+        'DataScience.failedToInterruptKernel',
+        'Failed to interrupt the Kernel.'
+    );
+    export const rawKernelStartFailedDueToTimeout = localize(
+        'DataScience.rawKernelStartFailedDueToTimeout',
+        "Unable to start Kernel '{0}' due to connection timeout. \nView Jupyter [log](command:jupyter.viewOutput) for further details."
+    );
+    export const viewJupyterLogForFurtherInfo = localize(
+        'DataScience.viewJupyterLogForFurtherInfo',
+        'View Jupyter [log](command:jupyter.viewOutput) for further details.'
     );
     export const kernelDied = localize(
         'DataScience.kernelDied',
-        'The kernel died. View Jupyter [log](command:{0}) for further details. \nError: {1}...'
+        'The kernel died. Error: {0}... View Jupyter [log](command:jupyter.viewOutput) for further details.'
     );
+    export const kernelDiedWithoutError = localize(
+        'DataScience.kernelDiedWithoutError',
+        "The kernel '{0}' died. View Jupyter [log](command:jupyter.viewOutput) for further details."
+    );
+    export const cannotRunCellKernelIsDead = localize(
+        'DataScience.cannotRunCellKernelIsDead',
+        "Cannot run cells, as the kernel '{0}' is dead."
+    );
+    export const showJupyterLogs = localize('jupyter.showJupyterLogs', 'Show Jupyter Logs.');
     export const executingCode = localize('DataScience.executingCode', 'Executing Cell');
     export const collapseAll = localize('DataScience.collapseAll', 'Collapse all cell inputs');
     export const expandAll = localize('DataScience.expandAll', 'Expand all cell inputs');
@@ -390,6 +414,7 @@ export namespace DataScience {
     export const expandSingle = localize('DataScience.expandSingle', 'Expand');
     export const exportKey = localize('DataScience.export', 'Export as Jupyter notebook');
     export const restartServer = localize('DataScience.restartServer', 'Restart Jupyter Kernel');
+    export const restartKernel = localize('DataScience.restartKernel', 'Restart Kernel');
     export const undo = localize('DataScience.undo', 'Undo');
     export const redo = localize('DataScience.redo', 'Redo');
     export const save = localize('DataScience.save', 'Save file');
@@ -400,6 +425,8 @@ export namespace DataScience {
     );
     export const restartedKernelHeader = localize('DataScience.restartedKernelHeader', 'Restarted {0}');
     export const startedNewKernelHeader = localize('DataScience.startedNewKernelHeader', 'Started {0}');
+    export const startingNewKernelHeader = localize('DataScience.kernelStarting', '_Connecting to kernel..._');
+    export const startingNewKernelCustomHeader = localize('DataScience.kernelStartingCustom', '_Connecting to {0}..._');
     export const connectKernelHeader = localize('DataScience.connectKernelHeader', 'Connected to {0}');
 
     export const jupyterSelectURIPrompt = localize(
@@ -449,6 +476,18 @@ export namespace DataScience {
     export const jupyterSelectPasswordPrompt = localize(
         'DataScience.jupyterSelectPasswordPrompt',
         'Enter your password'
+    );
+    export const pythonNotInstalled = localize(
+        'DataScience.installPython',
+        'Python is not installed. \nPlease [download](https://www.python.org/downloads) and install Python in order to execute cells in this notebook.'
+    );
+    export const pythonNotInstalledNonMarkdown = localize(
+        'DataScience.installPythonNonMarkdown',
+        'Python is not installed. \nPlease download and install Python in order to execute cells in this notebook from here https://www.python.org/downloads.'
+    );
+    export const kernelNotInstalled = localize(
+        'DataScience.installKernel',
+        "The Jupyter Kernel '{0}' could not be found and needs to be installed in order to execute cells in this notebook."
     );
     export const jupyterNotebookFailure = localize(
         'DataScience.jupyterNotebookFailure',
@@ -554,15 +593,17 @@ export namespace DataScience {
     export const fetchingDataViewer = localize('DataScience.fetchingDataViewer', 'Fetching data ...');
     export const noRowsInDataViewer = localize('DataScience.noRowsInDataViewer', 'No rows match current filter');
     export const jupyterServer = localize('DataScience.jupyterServer', 'Jupyter Server');
-    export const notebookIsTrusted = localize('DataScience.notebookIsTrusted', 'Trusted');
-    export const notebookIsNotTrusted = localize('DataScience.notebookIsNotTrusted', 'Not Trusted');
     export const noKernel = localize('DataScience.noKernel', 'No Kernel');
     export const serverNotStarted = localize('DataScience.serverNotStarted', 'Not Started');
-    export const selectKernel = localize('DataScience.selectKernel', 'Select a Kernel');
+    export const selectKernel = localize('DataScience.selectKernel', 'Change Kernel');
     export const selectDifferentKernel = localize('DataScience.selectDifferentKernel', 'Select a different Kernel');
+    export const kernelFilterPlaceholder = localize(
+        'jupyter.kernel.filter.placeholder',
+        'Choose the kernels that are available in the kernel picker.'
+    );
     export const selectDifferentJupyterInterpreter = localize(
         'DataScience.selectDifferentJupyterInterpreter',
-        'Select a different Interpreter'
+        'Change Interpreter'
     );
     export const localJupyterServer = localize('DataScience.localJupyterServer', 'local');
     export const pandasTooOldForViewingFormat = localize(
@@ -619,7 +660,7 @@ export namespace DataScience {
     export const debugStopCommandTitle = localize('DataScience.debugStopCommandTitle', 'Stop');
     export const runCurrentCellAndAddBelow = localize(
         'DataScience.runCurrentCellAndAddBelow',
-        'Run current and add cell below'
+        'Run current cell and add empty cell below'
     );
     export const jupyterDebuggerNotInstalledError = localize(
         'DataScience.jupyterDebuggerNotInstalledError',
@@ -672,14 +713,6 @@ export namespace DataScience {
         'DataScience.instructionComments',
         '# To add a new cell, type "{0}"\n# To add a new markdown cell, type "{0} [markdown]"\n'
     );
-    export const invalidNotebookFileError = localize(
-        'DataScience.invalidNotebookFileError',
-        'Notebook is not in the correct format. Check the file for correct json.'
-    );
-    export const invalidNotebookFileErrorFormat = localize(
-        'DataScience.invalidNotebookFileError',
-        '{0} is not a valid notebook file. Check the file for correct json.'
-    );
     export const nativeEditorTitle = localize('DataScience.nativeEditorTitle', 'Notebook Editor');
     export const untitledNotebookFileName = localize('DataScience.untitledNotebookFileName', 'Untitled');
     export const dirtyNotebookMessage1 = localize(
@@ -711,7 +744,7 @@ export namespace DataScience {
     export const openExportFileNo = localize('DataScience.openExportFileNo', 'No');
     export const exportFailedGeneralMessage = localize(
         'DataScience.exportFailedGeneralMessage',
-        `Please check the 'Python' [output](command:python.viewOutput) panel for further details.`
+        `Please check the 'Jupyter' [output](command:jupyter.viewOutput) panel for further details.`
     );
     export const exportToPDFDependencyMessage = localize(
         'DataScience.exportToPDFDependencyMessage',
@@ -736,18 +769,6 @@ export namespace DataScience {
     export const notebookNotFound = localize(
         'DataScience.notebookNotFound',
         'python -m jupyter notebook --version is not running'
-    );
-    export const findJupyterCommandProgress = localize(
-        'DataScience.findJupyterCommandProgress',
-        'Active interpreter does not support {0}. Searching for the best available interpreter.'
-    );
-    export const findJupyterCommandProgressCheckInterpreter = localize(
-        'DataScience.findJupyterCommandProgressCheckInterpreter',
-        'Checking {0}.'
-    );
-    export const findJupyterCommandProgressSearchCurrentPath = localize(
-        'DataScience.findJupyterCommandProgressSearchCurrentPath',
-        'Searching current path.'
     );
     export const savePngTitle = localize('DataScience.savePngTitle', 'Save Image');
     export const fallbackToUseActiveInterpreterAsKernel = localize(
@@ -909,28 +930,6 @@ export namespace DataScience {
         'Connecting to kernel.'
     );
 
-    export const reloadCustomEditor = localize(
-        'DataScience.reloadCustomEditor',
-        'Please reload VS Code to use the custom editor API'
-    );
-    export const reloadVSCodeNotebookEditor = localize(
-        'DataScience.reloadVSCodeNotebookEditor',
-        'Please reload VS Code to use the Notebook Editor'
-    );
-    export const usingPreviewNotebookWithOtherNotebookWarning = localize(
-        'DataScience.usingPreviewNotebookWithOtherNotebookWarning',
-        'Opening the same file in the Preview Notebook Editor and stable Notebook Editor is not recommended. Doing so could result in data loss or corruption of notebooks.'
-    );
-    export const launchNotebookTrustPrompt = localize(
-        'DataScience.launchNotebookTrustPrompt',
-        'A notebook could execute harmful code when opened. Some outputs have been hidden. Do you trust this notebook? [Learn more.](https://aka.ms/trusted-notebooks)'
-    );
-    export const trustNotebook = localize('DataScience.launchNotebookTrustPrompt.yes', 'Trust');
-    export const doNotTrustNotebook = localize('DataScience.launchNotebookTrustPrompt.no', 'Do not trust');
-    export const trustAllNotebooks = localize(
-        'DataScience.launchNotebookTrustPrompt.trustAllNotebooks',
-        'Trust all notebooks'
-    );
     export const insecureSessionMessage = localize(
         'DataScience.insecureSessionMessage',
         'Connecting over HTTP without a token may be an insecure connection. Do you want to connect to a possibly insecure server?'
@@ -945,23 +944,14 @@ export namespace DataScience {
         'DataScience.ipykernelNotInstalled',
         'IPyKernel not installed into interpreter {0}'
     );
-    export const illegalEditorConfig = localize(
-        'DataScience.illegalEditorConfig',
-        'CustomEditor and NativeNotebook experiments cannot be turned on together'
-    );
-    export const invalidCustomEditor = localize(
-        'DataScience.invalidCustomEditor',
-        'Using the Jupyter notebook editor requires the stable version of VS code and the CustomEditor experiment to be enabled.'
-    );
+    export const needIpykernel6 = localize('DataScience.needIpykernel6', 'Ipykernel setup required for this feature');
+    export const setup = localize('DataScience.setup', 'Setup');
+    export const startingRunByLine = localize('DataScience.startingRunByLine', 'Starting Run by Line');
     export const showDataViewerFail = localize(
         'DataScience.showDataViewerFail',
         'Failed to create the Data Viewer. Check the Jupyter tab of the Output window for more info.'
     );
 
-    export const kernelTipMessage = localize(
-        'DataScience.kernelTipMessage',
-        'Tip: You can change your notebook kernel in the status bar.'
-    );
     export const placeHolderToSelectOptionForNotebookCreation = localize(
         'DataScience.notebookCreationPickerPlaceHolder',
         'Select an option to create a blank notebook'
@@ -971,6 +961,30 @@ export namespace DataScience {
     export const recommendExtensionForNotebookLanguage = localize(
         'DataScience.recommendExtensionForNotebook',
         "The {0} extension is recommended for notebooks targetting the language '{1}'."
+    );
+    export const kernelWasNotStarted = localize(
+        'DataScience.kernelWasNotStarted',
+        'Kernel was not started. A kernel session is needed to start debugging.'
+    );
+    export const noNotebookToDebug = localize('DataScience.noNotebookToDebug', 'No active notebook document to debug.');
+    export const cantStartDebugging = localize('DataScience.cantStartDebugging', "Can't start debugging.");
+    export const importingIpynb = localize('DataScience.importingIpynb', 'Importing notebook file');
+    export const exportingToFormat = localize('DataScience.exportingToFormat', 'Exporting to {0}');
+    export const kernelCategoryForJupyterSession = localize(
+        'jupyter.kernel.category.jupyterSession',
+        'Jupyter Session'
+    );
+    export const kernelCategoryForJupyterKernel = localize('jupyter.kernel.category.jupyterKernel', 'Jupyter Kernel');
+    export const kernelCategoryForConda = localize('jupyter.kernel.category.conda', 'Conda Env');
+    export const kernelCategoryForPoetry = localize('jupyter.kernel.category.poetry', 'Poetry Env');
+    export const kernelCategoryForPipEnv = localize('jupyter.kernel.category.pipenv', 'Pipenv Env');
+    export const kernelCategoryForPyEnv = localize('jupyter.kernel.category.pyenv', 'PyEnv Env');
+    export const kernelCategoryForGlobal = localize('jupyter.kernel.category.global', 'Global Env');
+    export const kernelCategoryForVirtual = localize('jupyter.kernel.category.virtual', 'Virtual Env');
+
+    export const fileSeemsToBeInterferingWithKernelStartup = localize(
+        'DataScience.fileSeemsToBeInterferingWithKernelStartup',
+        "The file '{0}' seems to be overriding built in modules and interfering with the startup of the kernel. Consider renaming the file and starting the kernel again.."
     );
 }
 

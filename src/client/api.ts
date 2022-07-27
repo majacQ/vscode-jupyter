@@ -3,22 +3,13 @@
 
 'use strict';
 
-import { Disposable, Event, ExtensionMode, NotebookCell, Uri } from 'vscode';
+import { ExtensionMode } from 'vscode';
 import { IPythonApiProvider, PythonApi } from './api/types';
 import { isTestExecution } from './common/constants';
 import { traceError } from './common/logger';
 import { IExtensionContext } from './common/types';
-import { VSCodeNotebookProvider } from './datascience/constants';
 import { IDataViewerDataProvider, IDataViewerFactory } from './datascience/data-viewing/types';
-import { NotebookCellRunState } from './datascience/jupyter/kernels/types';
-import { KernelStateEventArgs } from './datascience/notebookExtensibility';
-import {
-    IJupyterUriProvider,
-    IJupyterUriProviderRegistration,
-    INotebookEditorProvider,
-    INotebookExtensibility,
-    IWebviewExtensibility
-} from './datascience/types';
+import { IJupyterUriProvider, IJupyterUriProviderRegistration, INotebookEditorProvider } from './datascience/types';
 import { IServiceContainer, IServiceManager } from './ioc/types';
 
 /*
@@ -33,19 +24,6 @@ export interface IExtensionApi {
      * @memberof IExtensionApi
      */
     ready: Promise<void>;
-    /**
-     * Do not use this to monitor execution state of cells of Native Notebooks (use VS Code API).
-     */
-    readonly onKernelStateChange: Event<KernelStateEventArgs>;
-    /**
-     * Do not use this to register Cell Toolbar icons for Native Notebook.
-     */
-    registerCellToolbarButton(
-        callback: (cell: NotebookCell, isInteractive: boolean, resource: Uri) => Promise<void>,
-        codicon: string,
-        statusToEnable: NotebookCellRunState[],
-        tooltip: string
-    ): Disposable;
     /**
      * Launches Data Viewer component.
      * @param {IDataViewerDataProvider} dataProvider Instance that will be used by the Data Viewer component to fetch data.
@@ -71,8 +49,6 @@ export function buildApi(
     serviceContainer: IServiceContainer,
     context: IExtensionContext
 ): IExtensionApi {
-    const notebookExtensibility = serviceContainer.get<INotebookExtensibility>(INotebookExtensibility);
-    const webviewExtensibility = serviceContainer.get<IWebviewExtensibility>(IWebviewExtensibility);
     let registered = false;
     const api: IExtensionApi = {
         // 'ready' will propagate the exception, but we must log it here first.
@@ -96,10 +72,8 @@ export function buildApi(
             const container = serviceContainer.get<IJupyterUriProviderRegistration>(IJupyterUriProviderRegistration);
             container.registerProvider(picker);
         },
-        onKernelStateChange: notebookExtensibility.onKernelStateChange.bind(notebookExtensibility),
-        registerCellToolbarButton: webviewExtensibility.registerCellToolbarButton.bind(webviewExtensibility),
         createBlankNotebook: async (options: { defaultCellLanguage: string }): Promise<void> => {
-            const service = serviceContainer.get<INotebookEditorProvider>(VSCodeNotebookProvider);
+            const service = serviceContainer.get<INotebookEditorProvider>(INotebookEditorProvider);
             await service.createNew(options);
         }
     };

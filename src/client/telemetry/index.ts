@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import type { JSONObject } from '@phosphor/coreutils';
+import type { JSONObject } from '@lumino/coreutils';
 // eslint-disable-next-line
 import TelemetryReporter from 'vscode-extension-telemetry/lib/telemetryReporter';
 
@@ -24,6 +24,8 @@ import { populateTelemetryWithErrorInfo } from '../common/errors';
 import { ErrorCategory, TelemetryErrorProperties } from '../common/errors/types';
 import { noop } from '../common/utils/misc';
 import { isPromise } from 'rxjs/internal-compatibility';
+import { DebuggingTelemetry } from '../debugger/constants';
+import { EnvironmentType } from '../pythonEnvironments/info';
 
 export const waitBeforeSending = 'waitBeforeSending';
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -272,7 +274,7 @@ type TypedMethodDescriptor<T> = (
     propertyKey: string | symbol,
     descriptor: TypedPropertyDescriptor<T>
 ) => TypedPropertyDescriptor<T> | void;
-
+const timesSeenThisEventWithSameProperties = new Set<string>();
 /**
  * Decorates a method, sending a telemetry event with the given properties.
  * @param eventName The event name to send.
@@ -314,7 +316,11 @@ export function captureTelemetry<This, P extends IEventNamePropertyMapping, E ex
                 return properties;
             };
 
+            // Determine if this is the first time we're sending this telemetry event for this same (class/method).
             const stopWatch = captureDuration ? new StopWatch() : undefined;
+            const key = `${eventName.toString()}${JSON.stringify(props() || {})}`;
+            const firstTime = !timesSeenThisEventWithSameProperties.has(key);
+            timesSeenThisEventWithSameProperties.add(key);
 
             // eslint-disable-next-line no-invalid-this, @typescript-eslint/no-use-before-define,
             const result = originalMethod.apply(this, args);
@@ -325,13 +331,17 @@ export function captureTelemetry<This, P extends IEventNamePropertyMapping, E ex
                 // eslint-disable-next-line
                 (result as Promise<void>)
                     .then((data) => {
-                        sendTelemetryEvent(eventName, stopWatch?.elapsedTime, props());
+                        const propsToSend = { ...(props() || {}) };
+                        if (firstTime) {
+                            (propsToSend as any)['firstTime'] = firstTime;
+                        }
+                        sendTelemetryEvent(eventName, stopWatch?.elapsedTime, propsToSend as typeof properties);
                         return data;
                     })
                     // eslint-disable-next-line @typescript-eslint/promise-function-async
                     .catch((ex) => {
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                        const failedProps: P[E] = props() || ({} as any);
+                        const failedProps: P[E] = { ...(props() || ({} as any)) };
                         (failedProps as any).failed = true;
                         sendTelemetryEvent(
                             failureEventName ? failureEventName : eventName,
@@ -462,9 +472,14 @@ export interface IEventNamePropertyMapping {
          *
          * @type {string}
          */
-        hashedName: string;
+        hashedNamev2: string;
     };
     [Telemetry.HashedCellOutputMimeTypePerf]: never | undefined;
+
+    /**
+     * Telemetry sent when we're unable to find a KernelSpec connection for Interactive window that can be started usig Python interpreter.
+     */
+    [Telemetry.FailedToFindKernelSpecInterpreterForInteractive]: never | undefined;
     /**
      * Telemetry sent for local Python Kernels.
      * Tracking whether we have managed to launch the kernel that matches the interpreter.
@@ -478,7 +493,38 @@ export interface IEventNamePropertyMapping {
      * Sent when a jupyter session fails to start and we ask the user for a new kernel
      */
     [Telemetry.AskUserForNewJupyterKernel]: never | undefined;
-    [Telemetry.KernelListingPerf]: never | undefined;
+    /**
+     * Time taken to list the Python interpreters.
+     */
+    [Telemetry.InterpreterListingPerf]: {
+        /**
+         * Whether this is the first time in the session.
+         * (fetching kernels first time in the session is slower, later its cached).
+         * This is a generic property supported for all telemetry (sent by decorators).
+         */
+        firstTime?: boolean;
+    };
+    [Telemetry.ActiveInterpreterListingPerf]: {
+        /**
+         * Whether this is the first time in the session.
+         * (fetching kernels first time in the session is slower, later its cached).
+         * This is a generic property supported for all telemetry (sent by decorators).
+         */
+        firstTime?: boolean;
+    };
+    [Telemetry.KernelListingPerf]: {
+        /**
+         * Whether this is the first time in the session.
+         * (fetching kernels first time in the session is slower, later its cached).
+         * This is a generic property supported for all telemetry (sent by decorators).
+         */
+        firstTime?: boolean;
+        /**
+         * Whether this telemetry is for listing of all kernels or just python or just non-python.
+         * (fetching kernels first time in the session is slower, later its cached).
+         */
+        kind: 'remote' | 'local' | 'localKernelSpec' | 'localPython';
+    };
     [Telemetry.NumberOfLocalKernelSpecs]: {
         /**
          * Number of kernel specs.
@@ -512,6 +558,21 @@ export interface IEventNamePropertyMapping {
         hasWidget: boolean;
         hasJupyter: boolean;
         hasVnd: boolean;
+    };
+
+    /**
+     * Used to capture time taken to get enviornment variables for a python environment.
+     * Also lets us know whether it worked or not.
+     */
+    [Telemetry.GetActivatedEnvironmentVariables]: {
+        /**
+         * Type of the Python environment.
+         */
+        envType?: EnvironmentType;
+        /**
+         * Whether the env variables were fetched successfully or not.
+         */
+        failed: boolean;
     };
     [EventName.HASHED_PACKAGE_PERF]: never | undefined;
     /**
@@ -627,7 +688,6 @@ export interface IEventNamePropertyMapping {
      * Time take for jupyter server to be busy from the time user first hit `run` cell until jupyter reports it is busy running a cell.
      */
     [Telemetry.StartExecuteNotebookCellPerceivedCold]: never | undefined;
-    [Telemetry.ExecuteNativeCell]: never | undefined;
     [Telemetry.ExpandAll]: never | undefined;
     [Telemetry.ExportNotebookInteractive]: never | undefined;
     [Telemetry.ExportPythonFileInteractive]: never | undefined;
@@ -676,8 +736,6 @@ export interface IEventNamePropertyMapping {
     [Telemetry.OpenedInteractiveWindow]: never | undefined;
     [Telemetry.OpenPlotViewer]: never | undefined;
     [Telemetry.Redo]: never | undefined;
-    [Telemetry.RemoteAddCode]: never | undefined;
-    [Telemetry.RemoteReexecuteCode]: never | undefined;
     [Telemetry.RestartJupyterTime]: never | undefined;
     [Telemetry.RestartKernel]: never | undefined;
     [Telemetry.RestartKernelCommand]: never | undefined;
@@ -734,6 +792,25 @@ export interface IEventNamePropertyMapping {
     [Telemetry.UserInstalledPandas]: never | undefined;
     [Telemetry.UserDidNotInstallJupyter]: never | undefined;
     [Telemetry.UserDidNotInstallPandas]: never | undefined;
+    [Telemetry.PythonNotInstalled]: {
+        action:
+            | 'displayed' // Message displayed.
+            | 'dismissed' // user dismissed the message.
+            | 'download'; // User chose click the download link.
+    };
+    [Telemetry.PythonExtensionNotInstalled]: {
+        action:
+            | 'displayed' // Message displayed.
+            | 'dismissed' // user dismissed the message.
+            | 'download'; // User chose click the download link.
+    };
+    [Telemetry.KernelNotInstalled]: {
+        action: 'displayed'; // Message displayed.
+        /**
+         * Language found in the notebook if a known language. Otherwise 'unknown'
+         */
+        language: string;
+    };
     [Telemetry.PythonModuleInstal]: {
         moduleName: string;
         /**
@@ -742,14 +819,23 @@ export interface IEventNamePropertyMapping {
          */
         isModulePresent?: 'true' | undefined;
         action:
-            | 'displayed' // Install prompt displayed.
+            | 'displayed' // Install prompt may have been displayed.
+            | 'prompted' // Install prompt was displayed.
             | 'installed' // Installation disabled (this is what python extension returns).
             | 'ignored' // Installation disabled (this is what python extension returns).
             | 'disabled' // Installation disabled (this is what python extension returns).
             | 'failed' // Installation disabled (this is what python extension returns).
             | 'install' // User chose install from prompt.
             | 'donotinstall' // User chose not to install from prompt.
+            | 'differentKernel' // User chose to select a different kernel.
+            | 'error' // Some other error.
             | 'dismissed'; // User chose to dismiss the prompt.
+        resourceType?: 'notebook' | 'interactive';
+        /**
+         * Hash of the resource (notebook.uri or pythonfile.uri associated with this).
+         * If we run the same notebook tomorrow, the hash will be the same.
+         */
+        resourceHash?: string;
     };
     /**
      * This telemetry tracks the display of the Picker for Jupyter Remote servers.
@@ -801,7 +887,6 @@ export interface IEventNamePropertyMapping {
     [Telemetry.VariableExplorerToggled]: { open: boolean; runByLine: boolean };
     [Telemetry.VariableExplorerVariableCount]: { variableCount: number };
     [Telemetry.WaitForIdleJupyter]: never | undefined;
-    [Telemetry.WebviewMonacoStyleUpdate]: never | undefined;
     [Telemetry.WebviewStartup]: { type: string };
     [Telemetry.WebviewStyleUpdate]: never | undefined;
     [Telemetry.RegisterInterpreterAsKernel]: never | undefined;
@@ -974,6 +1059,15 @@ export interface IEventNamePropertyMapping {
      */
     [Telemetry.GetPreferredKernelPerf]: undefined | never;
     /**
+     * Telemetry sent when we have attempted to find the preferred kernel.
+     */
+    [Telemetry.PreferredKernel]: {
+        result: 'found' | 'notfound' | 'failed'; // Whether a preferred kernel was found or not.
+        language: string; // Language of the associated notebook or interactive window.
+        resourceType: 'notebook' | 'interactive'; // Whether its a notebook or interactive window.
+        hasActiveInterpreter?: boolean; // Whether we have an active interpreter or not.
+    };
+    /**
      * Telemetry event sent if there's an error installing a jupyter required dependency
      *
      * @type { product: string }
@@ -1121,6 +1215,22 @@ export interface IEventNamePropertyMapping {
 
     // Telemetry send when we create a notebook for a raw kernel or jupyter
     [Telemetry.RawKernelCreatingNotebook]: never | undefined;
+    /**
+     * After starting a kernel we send a request to get the kernel info.
+     * This tracks the total time taken to get the response back (or wether we timedout).
+     * If we timeout and later we find successful comms for this session, then timeout is too low
+     * or we need more attempts.
+     */
+    [Telemetry.RawKernelInfoResonse]: {
+        /**
+         * Total number of attempts and sending a request and waiting for response.
+         */
+        attempts: number;
+        /**
+         * Whether we timedout while waiting for response for Kernel info request.
+         */
+        timedout: boolean;
+    };
     [Telemetry.JupyterCreatingNotebook]: never | undefined | TelemetryErrorProperties;
     // Telemetry sent when starting auto starting Native Notebook kernel fails silently.
     [Telemetry.KernelStartFailedAndUIDisabled]: never | undefined;
@@ -1165,6 +1275,49 @@ export interface IEventNamePropertyMapping {
     [Telemetry.RawKernelSessionStartNoIpykernel]: {
         reason: number;
     } & TelemetryErrorProperties;
+    /**
+     * This event is sent when the underlying kernelProcess for a
+     * RawJupyterSession exits.
+     */
+    [Telemetry.RawKernelSessionKernelProcessExited]: {
+        /**
+         * The kernel process's exit reason, based on the error
+         * object's reason
+         */
+        exitReason: string | undefined;
+        /**
+         * The kernel process's exit code.
+         */
+        exitCode: number | undefined;
+    };
+    /**
+     * This event is sent when a RawJupyterSession's `shutdownSession`
+     * method is called.
+     */
+    [Telemetry.RawKernelSessionShutdown]: {
+        /**
+         * This indicates whether the session being shutdown
+         * is a restart session.
+         */
+        isRequestToShutdownRestartSession: boolean | undefined;
+        /**
+         * This is the callstack at the time that the `shutdownSession`
+         * method is called, intended for us to be ale to identify who
+         * tried to shutdown the session.
+         */
+        stacktrace: string | undefined;
+    };
+    /**
+     * This event is sent when a RawSession's `dispose` method is called.
+     */
+    [Telemetry.RawKernelSessionDisposed]: {
+        /**
+         * This is the callstack at the time that the `dispose` method
+         * is called, intended for us to be able to identify who called
+         * `dispose` on the RawSession.
+         */
+        stacktrace: string | undefined;
+    };
 
     // Run by line events
     [Telemetry.RunByLineStart]: never | undefined;
@@ -1177,14 +1330,14 @@ export interface IEventNamePropertyMapping {
         kernelSpecCount: number; // Total number of kernel specs in the kernel list.
         kernelInterpreterCount: number; // Total number of interpreters in the kernel list.
         kernelLiveCount: number; // Total number of live kernels in the kernel list.
+        /**
+         * Total number of conda environments that share the same interpreter
+         * This happens when we create conda envs without the `python` argument.
+         * Such conda envs don't work today in the extension.
+         * Hence users with such environments could hvae issues with starting kernels or packages not getting loaded correctly or at all.
+         */
+        condaEnvsSharingSameInterpreter: number;
     } & ResourceSpecificTelemetryProperties;
-
-    // Trusted notebooks events
-    [Telemetry.NotebookTrustPromptShown]: never | undefined;
-    [Telemetry.TrustNotebook]: never | undefined;
-    [Telemetry.TrustAllNotebooks]: never | undefined;
-    [Telemetry.DoNotTrustNotebook]: never | undefined;
-    [Telemetry.NativeRandomBytesGenerationFailed]: [never | undefined];
 
     // Native notebooks events
     [VSCodeNativeTelemetry.AddCell]: never | undefined;
@@ -1192,7 +1345,6 @@ export interface IEventNamePropertyMapping {
     [VSCodeNativeTelemetry.MoveCell]: never | undefined;
     [VSCodeNativeTelemetry.ChangeToCode]: never | undefined;
     [VSCodeNativeTelemetry.ChangeToMarkdown]: never | undefined;
-    [VSCodeNativeTelemetry.RunAllCells]: never | undefined;
     [Telemetry.VSCNotebookCellTranslationFailed]: {
         isErrorOutput: boolean; // Whether we're trying to translate an error output when we shuldn't be.
     };
@@ -1274,16 +1426,6 @@ export interface IEventNamePropertyMapping {
         source: SliceOperationSource;
     };
     /*
-     * Telemetry sent when we update custom editor associations.
-     */
-    [Telemetry.UpdateCustomEditorAssociation]: {
-        /**
-         * 'added' means we enabled custom editor for user and ensured ipynb opens with custom editor.
-         * 'removed' means we custom editor is not enabled for the user and ensured ipynb doesn't open with custom editor.
-         */
-        type: 'added' | 'removed';
-    } & Partial<TelemetryErrorProperties>;
-    /*
      * Telemetry sent when we fail to create a Notebook Controller (an entry for the UI kernel list in Native Notebooks).
      */
     [Telemetry.FailedToCreateNotebookController]: {
@@ -1312,5 +1454,17 @@ export interface IEventNamePropertyMapping {
          * `doNotShowAgain` - If prompt was displayed & doNotShowAgain clicked by the user
          */
         action: 'displayed' | 'dismissed' | 'ok' | 'cancel' | 'doNotShowAgain';
+    };
+    [DebuggingTelemetry.clickedOnSetup]: never | undefined;
+    [DebuggingTelemetry.closedModal]: never | undefined;
+    [DebuggingTelemetry.ipykernel6Status]: {
+        status: 'installed' | 'notInstalled';
+    };
+    [DebuggingTelemetry.clickedRunByLine]: never | undefined;
+    [DebuggingTelemetry.successfullyStartedRunByLine]: never | undefined;
+    [DebuggingTelemetry.clickedRunAndDebugCell]: never | undefined;
+    [DebuggingTelemetry.successfullyStartedRunAndDebugCell]: never | undefined;
+    [DebuggingTelemetry.endedSession]: {
+        reason: 'normally' | 'onKernelDisposed' | 'onAnInterrupt' | 'onARestart' | 'withKeybinding';
     };
 }

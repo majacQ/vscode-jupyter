@@ -39,6 +39,7 @@ import 'slickgrid/slick.grid.css';
 import './reactSlickGrid.css';
 import { generateDisplayValue } from './cellFormatter';
 import { getLocString } from '../react-common/locReactSide';
+import { buildDataViewerFilterRegex } from '../../client/common/utils/regexp';
 /*
 WARNING: Do not change the order of these imports.
 Slick grid MUST be imported after we load jQuery and other stuff from `./globalJQueryImports`
@@ -84,23 +85,25 @@ class ColumnFilter {
     private nanRegEx = /^\s*nan.*/i;
     private infRegEx = /^\s*inf.*/i;
     private negInfRegEx = /^\s*-inf.*/i;
-    private lessThanRegEx = /^\s*<\s*((?<Number>\d+.*)|(?<NaN>nan)|(?<Inf>inf)|(?<NegInf>-inf))/i;
-    private lessThanEqualRegEx = /^\s*<=\s*((?<Number>\d+.*)|(?<NaN>nan)|(?<Inf>inf)|(?<NegInf>-inf)).*/i;
-    private greaterThanRegEx = /^\s*>\s*((?<Number>\d+.*)|(?<NaN>nan)|(?<Inf>inf)|(?<NegInf>-inf)).*/i;
-    private greaterThanEqualRegEx = /^\s*>=\s*((?<Number>\d+.*)|(?<NaN>nan)|(?<Inf>inf)|(?<NegInf>-inf)).*/i;
-    private equalToRegEx = /^\s*(?:=|==)\s*((?<Number>\d+.*)|(?<NaN>nan)|(?<Inf>inf)|(?<NegInf>-inf)).*/i;
+    private lessThanRegEx = /^\s*<\s*((?<Number>-?\d+.*)|(?<NaN>nan)|(?<Inf>inf)|(?<NegInf>-inf))/i;
+    private lessThanEqualRegEx = /^\s*<=\s*((?<Number>-?\d+.*)|(?<NaN>nan)|(?<Inf>inf)|(?<NegInf>-inf)).*/i;
+    private greaterThanRegEx = /^\s*>\s*((?<Number>-?\d+.*)|(?<NaN>nan)|(?<Inf>inf)|(?<NegInf>-inf)).*/i;
+    private greaterThanEqualRegEx = /^\s*>=\s*((?<Number>-?\d+.*)|(?<NaN>nan)|(?<Inf>inf)|(?<NegInf>-inf)).*/i;
+    private equalToRegEx = /^\s*(?:=|==)\s*((?<Number>-?\d+.*)|(?<NaN>nan)|(?<Inf>inf)|(?<NegInf>-inf)).*/i;
+    private textRegex: RegExp | undefined;
 
     constructor(public text: string, column: Slick.Column<Slick.SlickData>) {
         if (text && text.length > 0) {
             const columnType = (column as any).type;
             switch (columnType) {
-                case ColumnType.String:
-                default:
-                    this.matchFunc = (v: any) => !v || v.toString().includes(text);
-                    break;
-
                 case ColumnType.Number:
                     this.matchFunc = this.generateNumericOperation(text);
+                    break;
+
+                case ColumnType.String:
+                default:
+                    this.textRegex = buildDataViewerFilterRegex(text);
+                    this.matchFunc = (v: any) => this.matchStringWithWildcards(v);
                     break;
             }
         } else {
@@ -110,6 +113,15 @@ class ColumnFilter {
 
     public matches(value: any): boolean {
         return this.matchFunc(value);
+    }
+
+    // Tries to match entire words instead of possibly trying to match substrings.
+    private matchStringWithWildcards(v: any): boolean {
+        try {
+            return this.textRegex ? this.textRegex.test(v) : false;
+        } catch (e) {
+            return false;
+        }
     }
 
     private extractDigits(text: string, regex: RegExp): number {
@@ -152,7 +164,7 @@ class ColumnFilter {
             return (v: any) => v !== undefined && (v === n5 || (Number.isNaN(v) && Number.isNaN(n5)));
         } else {
             const n6 = parseFloat(text);
-            return (v: any) => v !== undefined && v === n6;
+            return (v: any) => v !== undefined && parseFloat(v) === n6;
         }
     }
 }
@@ -611,6 +623,12 @@ export class ReactSlickGrid extends React.Component<ISlickGridProps, ISlickGridS
                 const columnType = (col as any).type;
                 const isStringColumn = columnType === 'string' || columnType === 'object';
                 if (isStringColumn) {
+                    // Check if a or b is a missing value first and if so, put them at the end
+                    if (a[sortColumn].toString().toLowerCase() === 'nan') {
+                        return 1;
+                    } else if (b[sortColumn].toString().toLowerCase() === 'nan') {
+                        return -1;
+                    }
                     const aVal = a[sortColumn] ? a[sortColumn].toString() : '';
                     const bVal = b[sortColumn] ? b[sortColumn].toString() : '';
                     const aStr = aVal ? aVal.substring(0, Math.min(aVal.length, MaxStringCompare)) : aVal;
@@ -619,6 +637,12 @@ export class ReactSlickGrid extends React.Component<ISlickGridProps, ISlickGridS
                 } else {
                     const aVal = a[sortColumn];
                     const bVal = b[sortColumn];
+                    // Check for NaNs and put them at the end
+                    if (Number.isNaN(aVal)) {
+                        return 1;
+                    } else if (Number.isNaN(bVal)) {
+                        return -1;
+                    }
                     return aVal === bVal ? 0 : aVal > bVal ? 1 : -1;
                 }
             }
@@ -684,7 +708,7 @@ function readonlyCellEditor(this: any, args: any) {
         return $input.val();
     };
 
-    function handleKeyDown(this: any, e: JQueryKeyEventObject) {
+    function handleKeyDown(this: any, e: KeyboardEvent) {
         var cursorPosition = this.selectionStart;
         var textLength = this.value.length;
         // In the original SlickGrid TextEditor this references

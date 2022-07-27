@@ -24,7 +24,7 @@ import { reportAction } from '../progress/decorator';
 import { ReportableAction } from '../progress/types';
 import { IJupyterConnection, IJupyterSubCommandExecutionService } from '../types';
 import { JupyterConnectionWaiter } from './jupyterConnection';
-import { JupyterInstallError } from './jupyterInstallError';
+import { JupyterInstallError } from '../errors/jupyterInstallError';
 
 /**
  * Responsible for starting a notebook.
@@ -130,15 +130,14 @@ export class NotebookStarter implements Disposable {
             }
             const connection = await Promise.race([
                 starter.waitForConnection(),
-                createPromiseFromCancellation({
+                createPromiseFromCancellation<void>({
                     cancelAction: 'reject',
-                    defaultValue: new CancellationError(),
                     token: cancelToken
                 })
             ]);
 
-            if (connection instanceof CancellationError) {
-                throw connection;
+            if (!connection) {
+                throw new CancellationError();
             }
 
             // Fire off telemetry for the process being talkable

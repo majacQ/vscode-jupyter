@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-// import { nbformat } from '@jupyterlab/coreutils';
+// import type * as nbformat from '@jupyterlab/nbformat';
 // import { assert } from 'chai';
 // import * as fs from 'fs-extra';
 // import * as path from 'path';
@@ -29,7 +29,6 @@
 //     runAllCellsInActiveNotebook,
 //     insertCodeCell,
 //     startJupyterServer,
-//     trustAllNotebooks,
 //     waitForExecutionCompletedSuccessfully,
 //     waitForKernelToChange,
 //     waitForKernelToGetAutoSelected
@@ -75,7 +74,6 @@
 //             return this.skip();
 //         }
 
-//         await trustAllNotebooks();
 //         sinon.restore();
 //     });
 
@@ -124,7 +122,6 @@
 //         );
 //         // Don't use same file (due to dirty handling, we might save in dirty.)
 //         // Coz we won't save to file, hence extension will backup in dirty file and when u re-open it will open from dirty.
-//         await trustAllNotebooks();
 //         nbFile1 = await createTemporaryNotebook(templateIPynbFile, disposables, venvNoKernelDisplayName);
 //         await closeActiveWindows();
 //         sinon.restore();
@@ -137,7 +134,7 @@
 //     });
 
 //     test('Validate custom notebook metadata (from 3rd party extension) is saved into ipynb', async function () {
-//         await openNotebook(api.serviceContainer, nbFile1);
+//         await openNotebook(nbFile1);
 //         await waitForKernelToGetAutoSelected(undefined);
 
 //         // Verify the bogus controller is not selected.

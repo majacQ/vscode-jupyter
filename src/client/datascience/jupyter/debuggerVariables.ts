@@ -6,9 +6,10 @@ import * as path from 'path';
 
 import { DebugAdapterTracker, Disposable, Event, EventEmitter } from 'vscode';
 import { DebugProtocol } from 'vscode-debugprotocol';
-import { IDebugService } from '../../common/application/types';
+import { IDebugService, IVSCodeNotebook } from '../../common/application/types';
 import { traceError } from '../../common/logger';
 import { IConfigurationService, Resource } from '../../common/types';
+import { IDebuggingManager, KernelDebugMode } from '../../debugger/types';
 import { sendTelemetryEvent } from '../../telemetry';
 import { DataFrameLoading, GetVariableInfo, Identifiers, Telemetry } from '../constants';
 import { DebugLocationTracker } from '../debugLocationTracker';
@@ -17,9 +18,9 @@ import {
     IJupyterDebugService,
     IJupyterVariable,
     IJupyterVariablesRequest,
-    IJupyterVariablesResponse,
-    INotebook
+    IJupyterVariablesResponse
 } from '../types';
+import { IKernel } from './kernels/types';
 
 const DataViewableTypes: Set<string> = new Set<string>([
     'DataFrame',
@@ -28,7 +29,8 @@ const DataViewableTypes: Set<string> = new Set<string>([
     'ndarray',
     'Series',
     'Tensor',
-    'EagerTensor'
+    'EagerTensor',
+    'DataArray'
 ]);
 const KnownExcludedVariables = new Set<string>(['In', 'Out', 'exit', 'quit']);
 const MaximumRowChunkSizeForDebugger = 100;
@@ -42,11 +44,17 @@ export class DebuggerVariables extends DebugLocationTracker
     private importedGetVariableInfoScriptsIntoKernel = new Set<string>();
     private watchedNotebooks = new Map<string, Disposable[]>();
     private debuggingStarted = false;
+    private currentVariablesReference = 0;
+    private currentSeqNumsForVariables = new Set<Number>();
+
     constructor(
         @inject(IJupyterDebugService) @named(Identifiers.MULTIPLEXING_DEBUGSERVICE) private debugService: IDebugService,
-        @inject(IConfigurationService) private configService: IConfigurationService
+        @inject(IDebuggingManager) private readonly debuggingManager: IDebuggingManager,
+        @inject(IConfigurationService) private configService: IConfigurationService,
+        @inject(IVSCodeNotebook) private readonly vscNotebook: IVSCodeNotebook
     ) {
         super(undefined);
+        this.debuggingManager.onDoneDebugging(() => this.refreshEventEmitter.fire(), this);
     }
 
     public get refreshRequired(): Event<void> {
@@ -54,17 +62,17 @@ export class DebuggerVariables extends DebugLocationTracker
     }
 
     public get active(): boolean {
-        return this.debugService.activeDebugSession !== undefined && this.debuggingStarted;
+        return (
+            (this.debugService.activeDebugSession !== undefined || this.activeNotebookIsDebugging()) &&
+            this.debuggingStarted
+        );
     }
 
     // IJupyterVariables implementation
-    public async getVariables(
-        request: IJupyterVariablesRequest,
-        notebook?: INotebook
-    ): Promise<IJupyterVariablesResponse> {
+    public async getVariables(request: IJupyterVariablesRequest, kernel?: IKernel): Promise<IJupyterVariablesResponse> {
         // Listen to notebook events if we haven't already
-        if (notebook) {
-            this.watchNotebook(notebook);
+        if (kernel) {
+            this.watchKernel(kernel);
         }
 
         const result: IJupyterVariablesResponse = {
@@ -76,6 +84,21 @@ export class DebuggerVariables extends DebugLocationTracker
         };
 
         if (this.active) {
+            type SortableColumn = 'name' | 'type';
+            const sortColumn = request.sortColumn as SortableColumn;
+            const comparer = (a: IJupyterVariable, b: IJupyterVariable): number => {
+                // In case it is undefined or null
+                const aColumn = a[sortColumn] ? a[sortColumn] : '';
+                const bColumn = b[sortColumn] ? b[sortColumn] : '';
+
+                if (request.sortAscending) {
+                    return aColumn.localeCompare(bColumn, undefined, { sensitivity: 'base' });
+                } else {
+                    return bColumn.localeCompare(aColumn, undefined, { sensitivity: 'base' });
+                }
+            };
+            this.lastKnownVariables.sort(comparer);
+
             const startPos = request.startIndex ? request.startIndex : 0;
             const chunkSize = request.pageSize ? request.pageSize : MaximumRowChunkSizeForDebugger;
             result.pageStartIndex = startPos;
@@ -94,11 +117,11 @@ export class DebuggerVariables extends DebugLocationTracker
         return result;
     }
 
-    public async getMatchingVariable(name: string, notebook?: INotebook): Promise<IJupyterVariable | undefined> {
+    public async getMatchingVariable(name: string, kernel?: IKernel): Promise<IJupyterVariable | undefined> {
         if (this.active) {
             // Note, full variable results isn't necessary for this call. It only really needs the variable value.
             const result = this.lastKnownVariables.find((v) => v.name === name);
-            if (result && notebook && notebook.identity.fsPath.endsWith('.ipynb')) {
+            if (result && kernel?.notebookDocument.uri.fsPath.endsWith('.ipynb')) {
                 sendTelemetryEvent(Telemetry.RunByLineVariableHover);
             }
             return result;
@@ -107,7 +130,7 @@ export class DebuggerVariables extends DebugLocationTracker
 
     public async getDataFrameInfo(
         targetVariable: IJupyterVariable,
-        notebook?: INotebook,
+        kernel?: IKernel,
         sliceExpression?: string,
         isRefresh?: boolean
     ): Promise<IJupyterVariable> {
@@ -119,8 +142,8 @@ export class DebuggerVariables extends DebugLocationTracker
             targetVariable = await this.getFullVariable(targetVariable);
         }
         // Listen to notebook events if we haven't already
-        if (notebook) {
-            this.watchNotebook(notebook);
+        if (kernel) {
+            this.watchKernel(kernel);
         }
 
         // See if we imported or not into the kernel our special function
@@ -138,7 +161,7 @@ export class DebuggerVariables extends DebugLocationTracker
             (targetVariable as any).frameId
         );
 
-        let fileName = notebook ? path.basename(notebook.identity.path) : '';
+        let fileName = kernel ? path.basename(kernel.notebookDocument.uri.fsPath) : '';
         if (!fileName && this.debugLocation?.fileName) {
             fileName = path.basename(this.debugLocation.fileName);
         }
@@ -157,7 +180,7 @@ export class DebuggerVariables extends DebugLocationTracker
         targetVariable: IJupyterVariable,
         start: number,
         end: number,
-        notebook?: INotebook,
+        kernel?: IKernel,
         sliceExpression?: string
     ): Promise<{}> {
         // Developer error. The debugger cannot eval more than 100 rows at once.
@@ -171,8 +194,8 @@ export class DebuggerVariables extends DebugLocationTracker
             return {};
         }
         // Listen to notebook events if we haven't already
-        if (notebook) {
-            this.watchNotebook(notebook);
+        if (kernel) {
+            this.watchKernel(kernel);
         }
 
         let expression = targetVariable.name;
@@ -191,6 +214,19 @@ export class DebuggerVariables extends DebugLocationTracker
         return JSON.parse(results.result);
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    public onWillReceiveMessage(message: any) {
+        super.onWillReceiveMessage(message);
+        if (
+            message.type === 'request' &&
+            message.command === 'variables' &&
+            message.arguments &&
+            this.currentVariablesReference === message.arguments.variablesReference
+        ) {
+            this.currentSeqNumsForVariables.add(message.seq);
+        }
+    }
+
     // This special DebugAdapterTracker function listens to messages sent from the debug adapter to VS Code
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     public onDidSendMessage(message: any) {
@@ -198,10 +234,34 @@ export class DebuggerVariables extends DebugLocationTracker
         // When the initialize response comes back, indicate we have started.
         if (message.type === 'response' && message.command === 'initialize') {
             this.debuggingStarted = true;
-        } else if (message.type === 'response' && message.command === 'variables' && message.body) {
+        } else if (message.type === 'event' && message.event === 'stopped' && this.activeNotebookIsDebugging()) {
+            void this.handleNotebookVariables(message as DebugProtocol.StoppedEvent);
+        } else if (message.type === 'response' && message.command === 'scopes' && message.body && message.body.scopes) {
+            const response = message as DebugProtocol.ScopesResponse;
+
+            // Keep track of variablesReference because "hover" requests also try to update variables
+            const newVariablesReference = response.body.scopes[0].variablesReference;
+            if (newVariablesReference !== this.currentVariablesReference) {
+                this.currentVariablesReference = newVariablesReference;
+                this.currentSeqNumsForVariables.clear();
+            }
+        } else if (
+            message.type === 'response' &&
+            message.command === 'variables' &&
+            message.body &&
+            this.currentSeqNumsForVariables.has(message.request_seq)
+        ) {
             // If using the interactive debugger, update our variables.
             // eslint-disable-next-line
             // TODO: Figure out what resource to use
+
+            // Only update variables if it came from a "scopes" command and not a "hover"
+            // 1. Scopes command will come first with a variablesReference number
+            // 2. onWillReceiveMessage will have that variablesReference and
+            // will request for variables with a seq number
+            // 3. We only updateVariables if the seq number is one of the sequence numbers that
+            // came with the most recent 'scopes' variablesReference
+
             this.updateVariables(undefined, message as DebugProtocol.VariablesResponse);
             this.monkeyPatchDataViewableVariables(message);
         } else if (message.type === 'event' && message.event === 'terminated') {
@@ -218,14 +278,13 @@ export class DebuggerVariables extends DebugLocationTracker
         }
     }
 
-    private watchNotebook(notebook: INotebook) {
-        const key = notebook.identity.toString();
+    private watchKernel(kernel: IKernel) {
+        const key = kernel.notebookDocument.uri.toString();
         if (!this.watchedNotebooks.has(key)) {
             const disposables: Disposable[] = [];
-            disposables.push(notebook.onKernelChanged(this.resetImport.bind(this, key)));
-            disposables.push(notebook.onKernelRestarted(this.resetImport.bind(this, key)));
+            disposables.push(kernel.onRestarted(this.resetImport.bind(this, key)));
             disposables.push(
-                notebook.onDisposed(() => {
+                kernel.onDisposed(() => {
                     this.resetImport(key);
                     disposables.forEach((d) => d.dispose());
                     this.watchedNotebooks.delete(key);
@@ -346,6 +405,59 @@ export class DebuggerVariables extends DebugLocationTracker
         });
 
         this.refreshEventEmitter.fire();
+    }
+
+    private activeNotebookIsDebugging(): boolean {
+        const activeNotebook = this.vscNotebook.activeNotebookEditor;
+        return !!activeNotebook && this.debuggingManager.isDebugging(activeNotebook.document);
+    }
+
+    // This handles all the debug session calls, variable handling, and refresh calls needed for notebook debugging
+    private async handleNotebookVariables(stoppedMessage: DebugProtocol.StoppedEvent): Promise<void> {
+        const doc = this.vscNotebook.activeNotebookEditor?.document;
+        const threadId = stoppedMessage.body.threadId;
+
+        if (doc) {
+            const session = await this.debuggingManager.getDebugSession(doc);
+            if (session) {
+                // Call stack trace
+                const stResponse: DebugProtocol.StackTraceResponse['body'] = await session.customRequest('stackTrace', {
+                    threadId,
+                    startFrame: 0,
+                    levels: 1
+                });
+
+                //  Call scopes
+                if (stResponse && stResponse.stackFrames[0]) {
+                    const sf = stResponse.stackFrames[0];
+                    const mode = this.debuggingManager.getDebugMode(doc);
+                    let scopesResponse: DebugProtocol.ScopesResponse['body'] | undefined;
+
+                    if (mode === KernelDebugMode.RunByLine) {
+                        // Only call scopes (and variables) if we are stopped on the cell we are executing
+                        const cell = this.debuggingManager.getDebugCell(doc);
+                        if (sf.source && cell && sf.source.path === cell.document.uri.toString()) {
+                            scopesResponse = await session.customRequest('scopes', { frameId: sf.id });
+                        }
+                    } else {
+                        // Only call scopes (and variables) if we are stopped on the notebook we are executing
+                        const docURI = path.basename(doc.uri.toString());
+                        if (sf.source && sf.source.path && sf.source.path.includes(docURI)) {
+                            scopesResponse = await session.customRequest('scopes', { frameId: sf.id });
+                        }
+                    }
+
+                    // Call variables
+                    if (scopesResponse) {
+                        scopesResponse.scopes.forEach((scope: DebugProtocol.Scope) => {
+                            void session.customRequest('variables', { variablesReference: scope.variablesReference });
+                        });
+
+                        this.refreshEventEmitter.fire();
+                    }
+                }
+            }
+        }
     }
 }
 

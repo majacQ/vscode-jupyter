@@ -7,7 +7,7 @@ import * as download from 'download';
 import { sha256 } from 'hash.js';
 import * as path from 'path';
 import { Uri } from 'vscode';
-import { traceError, traceInfo, traceInfoIf } from '../../common/logger';
+import { traceError, traceInfo, traceInfoIfCI } from '../../common/logger';
 import { IFileSystem, TemporaryFile } from '../../common/platform/types';
 import { IConfigurationService, WidgetCDNs } from '../../common/types';
 import { createDeferred } from '../../common/utils/async';
@@ -97,9 +97,17 @@ export class CDNWidgetScriptSourceProvider implements IWidgetScriptSourceProvide
         const diskPath = path.join(this.localResourceUriConverter.rootScriptFolder.fsPath, key, 'index.js');
         let tempFile: TemporaryFile | undefined;
 
+        // Log the location that we are going to search on disk (don't remove, can allow third parties to drop
+        // files locally and test new versions of their extensions.
+        traceInfo(
+            `${ConsoleForegroundColors.Green}Searching for Widget Script ${moduleName}#${moduleVersion} at path: ${diskPath}`
+        );
+
         // Might be on disk, try there first.
         if (diskPath && (await this.fs.localFileExists(diskPath))) {
-            traceInfo(`${ConsoleForegroundColors.Green}Widget Script ${moduleName}#${moduleVersion} found`);
+            traceInfo(
+                `${ConsoleForegroundColors.Green}Widget Script ${moduleName}#${moduleVersion} found at path: ${diskPath}`
+            );
             const scriptUri = (await this.localResourceUriConverter.asWebviewUri(Uri.file(diskPath))).toString();
             return { moduleName, scriptUri, source: 'cdn' };
         }
@@ -116,8 +124,7 @@ export class CDNWidgetScriptSourceProvider implements IWidgetScriptSourceProvide
                 traceInfo(
                     `${ConsoleForegroundColors.Green}Wiget ${moduleName} successfully downloaded to temp file ${tempFile.filePath}`
                 );
-                traceInfoIf(
-                    !!process.env.VSC_JUPYTER_FORCE_LOGGING,
+                traceInfoIfCI(
                     `Widget Script downloaded for ${moduleName}:${moduleVersion}, already downloaded ${await this.fs.localFileExists(
                         diskPath
                     )}`

@@ -8,7 +8,7 @@ import * as path from 'path';
 import { EventEmitter, Memento, ViewColumn } from 'vscode';
 
 import { IApplicationShell, IWebviewPanelProvider, IWorkspaceService } from '../../common/application/types';
-import { EXTENSION_ROOT_DIR, UseCustomEditorApi } from '../../common/constants';
+import { EXTENSION_ROOT_DIR } from '../../common/constants';
 import { traceError, traceInfo } from '../../common/logger';
 import { GLOBAL_MEMENTO, IConfigurationService, IDisposable, IMemento, Resource } from '../../common/types';
 import * as localize from '../../common/utils/localize';
@@ -16,8 +16,14 @@ import { noop } from '../../common/utils/misc';
 import { StopWatch } from '../../common/utils/stopWatch';
 import { sendTelemetryEvent } from '../../telemetry';
 import { HelpLinks, Telemetry } from '../constants';
-import { JupyterDataRateLimitError } from '../jupyter/jupyterDataRateLimitError';
-import { ICodeCssGenerator, IThemeFinder, WebViewViewChangeEventArgs } from '../types';
+import { JupyterDataRateLimitError } from '../errors/jupyterDataRateLimitError';
+import {
+    ICodeCssGenerator,
+    IDataScienceErrorHandler,
+    IJupyterVariableDataProvider,
+    IThemeFinder,
+    WebViewViewChangeEventArgs
+} from '../types';
 import { WebviewPanelHost } from '../webviews/webviewPanelHost';
 import { DataViewerMessageListener } from './dataViewerMessageListener';
 import {
@@ -31,12 +37,13 @@ import {
 } from './types';
 import { isValidSliceExpression, preselectedSliceExpression } from '../../../datascience-ui/data-explorer/helpers';
 import { CheckboxState } from '../../telemetry/constants';
+import { IKernel } from '../jupyter/kernels/types';
 
 const PREFERRED_VIEWGROUP = 'JupyterDataViewerPreferredViewColumn';
 const dataExplorerDir = path.join(EXTENSION_ROOT_DIR, 'out', 'datascience-ui', 'viewers');
 @injectable()
 export class DataViewer extends WebviewPanelHost<IDataViewerMapping> implements IDataViewer, IDisposable {
-    private dataProvider: IDataViewerDataProvider | undefined;
+    private dataProvider: IDataViewerDataProvider | IJupyterVariableDataProvider | undefined;
     private rowsTimer: StopWatch | undefined;
     private pendingRowsCount: number = 0;
     private dataFrameInfoPromise: Promise<IDataFrameInfo> | undefined;
@@ -45,6 +52,10 @@ export class DataViewer extends WebviewPanelHost<IDataViewerMapping> implements 
 
     public get active() {
         return !!this.webPanel?.isActive();
+    }
+
+    public get refreshPending() {
+        return this.pendingRowsCount > 0;
     }
 
     public get onDidDisposeDataViewer() {
@@ -65,8 +76,8 @@ export class DataViewer extends WebviewPanelHost<IDataViewerMapping> implements 
         @inject(IThemeFinder) themeFinder: IThemeFinder,
         @inject(IWorkspaceService) workspaceService: IWorkspaceService,
         @inject(IApplicationShell) private applicationShell: IApplicationShell,
-        @inject(UseCustomEditorApi) useCustomEditorApi: boolean,
-        @inject(IMemento) @named(GLOBAL_MEMENTO) readonly globalMemento: Memento
+        @inject(IMemento) @named(GLOBAL_MEMENTO) readonly globalMemento: Memento,
+        @inject(IDataScienceErrorHandler) readonly errorHandler: IDataScienceErrorHandler
     ) {
         super(
             configuration,
@@ -76,15 +87,17 @@ export class DataViewer extends WebviewPanelHost<IDataViewerMapping> implements 
             workspaceService,
             (c, v, d) => new DataViewerMessageListener(c, v, d),
             dataExplorerDir,
-            [path.join(dataExplorerDir, 'commons.initial.bundle.js'), path.join(dataExplorerDir, 'dataExplorer.js')],
+            [path.join(dataExplorerDir, 'dataExplorer.js')],
             localize.DataScience.dataExplorerTitle(),
-            globalMemento.get(PREFERRED_VIEWGROUP) ?? ViewColumn.One,
-            useCustomEditorApi
+            globalMemento.get(PREFERRED_VIEWGROUP) ?? ViewColumn.One
         );
         this.onDidDispose(this.dataViewerDisposed, this);
     }
 
-    public async showData(dataProvider: IDataViewerDataProvider, title: string): Promise<void> {
+    public async showData(
+        dataProvider: IDataViewerDataProvider | IJupyterVariableDataProvider,
+        title: string
+    ): Promise<void> {
         if (!this.isDisposed) {
             // Save the data provider
             this.dataProvider = dataProvider;
@@ -108,6 +121,13 @@ export class DataViewer extends WebviewPanelHost<IDataViewerMapping> implements 
 
             // Send a message with our data
             this.postMessage(DataViewerMessages.InitializeData, dataFrameInfo).ignoreErrors();
+        }
+    }
+
+    public get kernel(): IKernel | undefined {
+        if (this.dataProvider && 'kernel' in this.dataProvider) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            return this.dataProvider.kernel;
         }
     }
 
@@ -257,6 +277,7 @@ export class DataViewer extends WebviewPanelHost<IDataViewerMapping> implements 
                     Math.min(request.end, dataFrameInfo.rowCount ? dataFrameInfo.rowCount : 0),
                     request.sliceExpression
                 );
+                this.pendingRowsCount = Math.max(0, this.pendingRowsCount - rows.length);
                 return this.postMessage(DataViewerMessages.GetRowsResponse, {
                     rows,
                     start: request.start,
@@ -273,16 +294,18 @@ export class DataViewer extends WebviewPanelHost<IDataViewerMapping> implements 
             if (e instanceof JupyterDataRateLimitError) {
                 traceError(e);
                 const actionTitle = localize.DataScience.pythonInteractiveHelpLink();
-                this.applicationShell.showErrorMessage(e.toString(), actionTitle).then((v) => {
-                    // User clicked on the link, open it.
-                    if (v === actionTitle) {
-                        this.applicationShell.openUrl(HelpLinks.JupyterDataRateHelpLink);
-                    }
-                }, noop);
+                this.applicationShell
+                    .showErrorMessage(localize.DataScience.jupyterDataRateExceeded(), actionTitle)
+                    .then((v) => {
+                        // User clicked on the link, open it.
+                        if (v === actionTitle) {
+                            this.applicationShell.openUrl(HelpLinks.JupyterDataRateHelpLink);
+                        }
+                    }, noop);
                 this.dispose();
             }
             traceError(e);
-            this.applicationShell.showErrorMessage(e).then(noop, noop);
+            void this.errorHandler.handleError(e);
         } finally {
             this.sendElapsedTimeTelemetry();
         }

@@ -71,9 +71,7 @@ export async function activate(context: IExtensionContext): Promise<IExtensionAp
         // Return a dummy object, to ensure other extension do not fall over.
         return {
             createBlankNotebook: () => Promise.resolve(),
-            onKernelStateChange: () => ({ dispose: noop }),
             ready: Promise.resolve(),
-            registerCellToolbarButton: () => ({ dispose: noop }),
             registerPythonApi: noop,
             registerRemoteServerProvider: noop,
             showDataViewer: () => Promise.resolve()

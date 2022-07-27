@@ -3,7 +3,7 @@
 'use strict';
 import './mainPanel.css';
 
-import { JSONArray } from '@phosphor/coreutils';
+import { JSONArray } from '@lumino/coreutils';
 import * as React from 'react';
 
 import {
@@ -37,7 +37,7 @@ import * as uuid from 'uuid/v4';
 import { initializeIcons } from '@fluentui/react';
 initializeIcons(); // Register all FluentUI icons being used to prevent developer console errors
 
-const SliceableTypes: Set<string> = new Set<string>(['ndarray', 'Tensor', 'EagerTensor']);
+const SliceableTypes: Set<string> = new Set<string>(['ndarray', 'Tensor', 'EagerTensor', 'DataArray']);
 const RowNumberColumnName = uuid(); // Unique key for our column containing row numbers
 
 // Our css has to come after in order to override body styles
@@ -421,12 +421,13 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
     }
 
     private normalizeData(rows: JSONArray): ISlickRow[] {
-        // While processing rows we may encounter Inf, -Inf or NaN.
+        // While processing rows we may encounter Inf or -Inf.
         // These rows' column types will initially be 'string' or 'object' so
         // make sure we update the column types
         // Set of columns to update based on this batch of rows
         const columnsToUpdate = new Set<string>();
         // Make sure we have an index field and all rows have an item
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const normalizedRows = rows.map((r: any | undefined, idx: number) => {
             if (!r) {
                 r = {};
@@ -437,7 +438,8 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
                     case 'nan':
                         r[key] = NaN;
                         if (!this.columnsContainingInfOrNaN.has(key)) {
-                            columnsToUpdate.add(key);
+                            // Don't add column to columnsToUpdate just because of this because
+                            // some non-numerical columns can have NaN values if a value is missing
                             this.columnsContainingInfOrNaN.add(key);
                         }
                         break;
@@ -467,6 +469,7 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
             columns
                 .filter((column) => column.name && columnsToUpdate.has(column.name))
                 .forEach((column) => {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     (column as any).type = ColumnType.Number;
                 });
             this.updateColumns(columns);
@@ -480,6 +483,7 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
 
     private updateRows(newRows: ISlickRow[]) {
         if (this.updateTimeout !== undefined) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             clearTimeout(this.updateTimeout as any);
             this.updateTimeout = undefined;
         }

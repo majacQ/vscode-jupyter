@@ -3,16 +3,17 @@
 
 'use strict';
 
-import type { Kernel } from '@jupyterlab/services';
+import type { KernelSpec } from '@jupyterlab/services';
 import { inject, injectable } from 'inversify';
 import * as path from 'path';
 import { CancellationToken, CancellationTokenSource } from 'vscode';
 import { Cancellation, wrapCancellationTokens } from '../../../common/cancellation';
 import '../../../common/extensions';
-import { traceDecorators, traceInfo } from '../../../common/logger';
+import { traceDecorators, traceInfo, traceInfoIfCI } from '../../../common/logger';
+import { getDisplayPath } from '../../../common/platform/fs-paths';
 import { IFileSystem } from '../../../common/platform/types';
 
-import { ReadWrite } from '../../../common/types';
+import { ReadWrite, Resource } from '../../../common/types';
 import { noop } from '../../../common/utils/misc';
 import { IEnvironmentActivationService } from '../../../interpreter/activation/types';
 import { PythonEnvironment } from '../../../pythonEnvironments/info';
@@ -49,6 +50,7 @@ export class JupyterKernelService {
      */
     @traceDecorators.verbose('Check if a kernel is usable')
     public async ensureKernelIsUsable(
+        resource: Resource,
         kernel: KernelConnectionMetadata,
         cancelToken?: CancellationToken,
         disableUI?: boolean
@@ -59,32 +61,44 @@ export class JupyterKernelService {
 
         // If we have an interpreter, make sure it has the correct dependencies installed
         if (kernel.kind !== 'connectToLiveKernel' && kernel.interpreter) {
-            await this.kernelDependencyService.installMissingDependencies(kernel.interpreter, token, disableUI);
+            await this.kernelDependencyService.installMissingDependencies(
+                resource,
+                kernel.interpreter,
+                token,
+                disableUI
+            );
         }
+
+        var specFile: string | undefined = undefined;
 
         // If the spec file doesn't exist or is not defined, we need to register this kernel
         if (kernel.kind !== 'connectToLiveKernel' && kernel.kernelSpec && kernel.interpreter) {
-            if (!kernel.kernelSpec.specFile || !(await this.fs.localFileExists(kernel.kernelSpec.specFile))) {
-                await this.registerKernel(kernel, token);
+            // Default to the kernel spec file.
+            specFile = kernel.kernelSpec.specFile;
+
+            if (!specFile || !(await this.fs.localFileExists(specFile))) {
+                specFile = await this.registerKernel(kernel, token);
             }
             // Special case. If the original spec file came from an interpreter, we may need to register a kernel
-            else if (kernel.interpreter && kernel.kernelSpec.specFile) {
+            else if (kernel.interpreter && specFile) {
                 // See if the specfile we started with (which might be the one registered in the interpreter)
                 // doesn't match the name of the spec file
-                if (
-                    path.basename(path.dirname(kernel.kernelSpec.specFile)).toLowerCase() !=
-                    kernel.kernelSpec.name.toLowerCase()
-                ) {
+                if (path.basename(path.dirname(specFile)).toLowerCase() != kernel.kernelSpec.name.toLowerCase()) {
                     // This means the specfile for the kernelspec will not be found by jupyter. We need to
                     // register it
-                    await this.registerKernel(kernel, token);
+                    specFile = await this.registerKernel(kernel, token);
                 }
             }
         }
 
         // Update the kernel environment to use the interpreter's latest
-        if (kernel.kind !== 'connectToLiveKernel' && kernel.kernelSpec && kernel.interpreter) {
-            await this.updateKernelEnvironment(kernel.interpreter, kernel.kernelSpec, token);
+        if (kernel.kind !== 'connectToLiveKernel' && kernel.kernelSpec && kernel.interpreter && specFile) {
+            traceInfoIfCI(
+                `updateKernelEnvironment ${kernel.interpreter.displayName}, ${getDisplayPath(
+                    kernel.interpreter.path
+                )} for ${kernel.id}`
+            );
+            await this.updateKernelEnvironment(kernel.interpreter, kernel.kernelSpec, specFile, token);
         }
     }
 
@@ -111,7 +125,7 @@ export class JupyterKernelService {
     private async registerKernel(
         kernel: LocalKernelConnectionMetadata,
         cancelToken?: CancellationToken
-    ): Promise<void> {
+    ): Promise<string | undefined> {
         // Get the global kernel location
         const root = await this.kernelFinder.getKernelSpecRootPath();
 
@@ -125,7 +139,7 @@ export class JupyterKernelService {
 
         // If this file already exists, we can just exit
         if (await this.fs.localFileExists(kernelSpecFilePath)) {
-            return;
+            return kernelSpecFilePath;
         }
 
         // If it doesn't exist, see if we had an original spec file that's different.
@@ -152,7 +166,8 @@ export class JupyterKernelService {
         try {
             await this.fs.writeLocalFile(kernelSpecFilePath, JSON.stringify(contents, undefined, 4));
         } catch (ex) {
-            sendTelemetryEvent(Telemetry.FailedToUpdateKernelSpec, undefined, undefined, ex, true);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            sendTelemetryEvent(Telemetry.FailedToUpdateKernelSpec, undefined, undefined, ex as any, true);
             throw ex;
         }
         if (cancelToken?.isCancellationRequested) {
@@ -174,20 +189,22 @@ export class JupyterKernelService {
         }
 
         sendTelemetryEvent(Telemetry.RegisterAndUseInterpreterAsKernel);
+        return kernelSpecFilePath;
     }
     private async updateKernelEnvironment(
         interpreter: PythonEnvironment | undefined,
         kernel: IJupyterKernelSpec,
+        specFile: string,
         cancelToken?: CancellationToken,
         forceWrite?: boolean
     ) {
         const kernelSpecRootPath = await this.kernelFinder.getKernelSpecRootPath();
         const specedKernel = kernel as JupyterKernelSpec;
-        if (specedKernel.specFile && kernelSpecRootPath) {
+        if (specFile && kernelSpecRootPath) {
             // Spec file may not be the same as the original spec file path.
-            const kernelSpecFilePath = specedKernel.specFile.includes(specedKernel.name)
-                ? specedKernel.specFile
-                : path.join(kernelSpecRootPath, specedKernel.name, 'kernel.json');
+            const kernelSpecFilePath = specFile.includes(kernel.name)
+                ? specFile
+                : path.join(kernelSpecRootPath, kernel.name, 'kernel.json');
 
             // Make sure the file exists
             if (!(await this.fs.localFileExists(kernelSpecFilePath))) {
@@ -195,7 +212,9 @@ export class JupyterKernelService {
             }
 
             // Read spec from the file.
-            let specModel: ReadWrite<Kernel.ISpecModel> = JSON.parse(await this.fs.readLocalFile(kernelSpecFilePath));
+            let specModel: ReadWrite<KernelSpec.ISpecModel> = JSON.parse(
+                await this.fs.readLocalFile(kernelSpecFilePath)
+            );
             let shouldUpdate = false;
 
             // Make sure the specmodel has an interpreter or already in the metadata or we
@@ -206,7 +225,9 @@ export class JupyterKernelService {
                     // If conda is the first word, its possible its a conda activation command.
                     traceInfo(`Spec argv[0], not updated as it is using conda.`);
                 } else {
-                    traceInfo(`Spec argv[0] updated from '${specModel.argv[0]}' to '${interpreter.path}'`);
+                    traceInfo(
+                        `Spec argv[0] updated from '${specModel.argv[0]}' to '${getDisplayPath(interpreter.path)}'`
+                    );
                     specModel.argv[0] = interpreter.path;
                 }
 
@@ -244,7 +265,8 @@ export class JupyterKernelService {
                 try {
                     await this.fs.writeLocalFile(kernelSpecFilePath, JSON.stringify(specModel, undefined, 2));
                 } catch (ex) {
-                    sendTelemetryEvent(Telemetry.FailedToUpdateKernelSpec, undefined, undefined, ex, true);
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    sendTelemetryEvent(Telemetry.FailedToUpdateKernelSpec, undefined, undefined, ex as any, true);
                     throw ex;
                 }
             }

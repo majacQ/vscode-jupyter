@@ -2,22 +2,14 @@
 // Licensed under the MIT License.
 'use strict';
 import { inject, injectable } from 'inversify';
-import { ConfigurationTarget, languages, NotebookContentProvider as VSCNotebookContentProvider } from 'vscode';
+import { languages } from 'vscode';
 import { IExtensionSingleActivationService } from '../../activation/types';
-import {
-    IApplicationEnvironment,
-    ICommandManager,
-    IVSCodeNotebook,
-    IWorkspaceService
-} from '../../common/application/types';
-import { NotebookCellScheme, PYTHON_LANGUAGE, UseVSCodeNotebookEditorApi } from '../../common/constants';
-import { traceError } from '../../common/logger';
-import { IDisposableRegistry } from '../../common/types';
-import { noop } from '../../common/utils/misc';
-import { JupyterNotebookView } from './constants';
-import { isJupyterNotebook, NotebookCellStateTracker } from './helpers/helpers';
-import { NotebookCompletionProvider } from './intellisense/completionProvider';
-import { INotebookContentProvider } from './types';
+import { NOTEBOOK_SELECTOR } from '../../common/constants';
+import { IConfigurationService, IDisposableRegistry } from '../../common/types';
+import { PythonKernelCompletionProvider } from './intellisense/pythonKernelCompletionProvider';
+
+// Default set of trigger characters for jupyter
+const DefaultTriggerCharacters = ['.', '%'];
 
 /**
  * This class basically registers the necessary providers and the like with VSC.
@@ -26,105 +18,29 @@ import { INotebookContentProvider } from './types';
 @injectable()
 export class NotebookIntegration implements IExtensionSingleActivationService {
     constructor(
-        @inject(IVSCodeNotebook) private readonly vscNotebook: IVSCodeNotebook,
-        @inject(UseVSCodeNotebookEditorApi) private readonly useNativeNb: boolean,
         @inject(IDisposableRegistry) private readonly disposables: IDisposableRegistry,
-        @inject(INotebookContentProvider) private readonly notebookContentProvider: VSCNotebookContentProvider,
-        @inject(IApplicationEnvironment) private readonly env: IApplicationEnvironment,
-        @inject(IWorkspaceService) private readonly workspace: IWorkspaceService,
-        @inject(ICommandManager) private readonly commandManager: ICommandManager,
-        @inject(NotebookCompletionProvider) private readonly completionProvider: NotebookCompletionProvider
+        @inject(IConfigurationService) private readonly config: IConfigurationService,
+        @inject(PythonKernelCompletionProvider) private readonly completionProvider: PythonKernelCompletionProvider
     ) {}
     public async activate(): Promise<void> {
-        // This condition is temporary.
-        // If user belongs to the experiment, then make the necessary changes to package.json.
-        // Once the API is final, we won't need to modify the package.json.
-        if (this.useNativeNb) {
-            this.registerCompletionItemProvider();
-            this.disposables.push(new NotebookCellStateTracker());
-            await this.enableNotebooks();
-        } else {
-            // Enable command to open in preview notebook (only for insiders).
-            if (this.env.channel === 'insiders') {
-                await this.commandManager
-                    .executeCommand('setContext', 'jupyter.opennotebookInPreviewEditor.enabled', true)
-                    .then(noop, noop);
-            }
-            // Possible user was in experiment, then they opted out. In this case we need to revert the changes made to the settings file.
-            // Again, this is temporary code.
-            await this.disableNotebooks();
+        let triggerChars =
+            this.config.getSettings().pythonCompletionTriggerCharacters?.split('') || DefaultTriggerCharacters;
+
+        // Special case. We know that the jupyter autocomplete works in strings, so if strings are available, trigger on / too so
+        // we can fill out paths.
+        if (triggerChars.includes('"') || triggerChars.includes("'")) {
+            triggerChars = [...triggerChars, '/'];
         }
-        if (this.useNativeNb) {
-            try {
-                this.disposables.push(
-                    this.vscNotebook.registerNotebookContentProvider(
-                        JupyterNotebookView,
-                        this.notebookContentProvider,
-                        {
-                            transientOutputs: false,
-                            transientCellMetadata: {
-                                breakpointMargin: true,
-                                inputCollapsed: true,
-                                outputCollapsed: true,
-                                custom: false
-                            }
-                        }
-                    )
-                );
-            } catch (ex) {
-                // If something goes wrong, and we're not in Insiders & not using the NativeEditor experiment, then swallow errors.
-                traceError('Failed to register VS Code Notebook API', ex);
-                if (this.useNativeNb) {
-                    throw ex;
-                }
-            }
-        }
+        this.registerCompletionItemProvider(triggerChars);
     }
 
-    private registerCompletionItemProvider() {
+    private registerCompletionItemProvider(triggerChars: string[]) {
+        // Register the jupyter kernel completions for PYTHON cells.
         const disposable = languages.registerCompletionItemProvider(
-            { language: PYTHON_LANGUAGE, scheme: NotebookCellScheme },
+            NOTEBOOK_SELECTOR,
             this.completionProvider,
-            '.'
+            ...triggerChars
         );
         this.disposables.push(disposable);
-    }
-    private async enableNotebooks() {
-        await this.enableDisableEditorAssociation(true);
-    }
-    private async enableDisableEditorAssociation(enable: boolean) {
-        // This code is temporary.
-        const settings = this.workspace.getConfiguration('workbench', undefined);
-        const editorAssociations = settings.get('editorAssociations') as {
-            viewType: string;
-            filenamePattern: string;
-        }[];
-
-        // Update the settings.
-        if (
-            enable &&
-            (!Array.isArray(editorAssociations) ||
-                editorAssociations.length === 0 ||
-                !editorAssociations.find((item) => isJupyterNotebook(item.viewType)))
-        ) {
-            editorAssociations.push({
-                viewType: 'jupyter-notebook',
-                filenamePattern: '*.ipynb'
-            });
-            await settings.update('editorAssociations', editorAssociations, ConfigurationTarget.Global);
-        }
-
-        // Revert the settings.
-        if (
-            !enable &&
-            Array.isArray(editorAssociations) &&
-            editorAssociations.find((item) => isJupyterNotebook(item.viewType))
-        ) {
-            const updatedSettings = editorAssociations.filter((item) => !isJupyterNotebook(item.viewType));
-            await settings.update('editorAssociations', updatedSettings, ConfigurationTarget.Global);
-        }
-    }
-    private async disableNotebooks() {
-        await this.enableDisableEditorAssociation(false);
     }
 }

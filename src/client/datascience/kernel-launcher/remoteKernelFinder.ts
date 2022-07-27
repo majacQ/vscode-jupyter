@@ -3,15 +3,14 @@
 'use strict';
 
 import { Kernel } from '@jupyterlab/services';
-import { nbformat } from '@jupyterlab/coreutils';
+import type * as nbformat from '@jupyterlab/nbformat';
 import { injectable, inject } from 'inversify';
 import { CancellationToken } from 'vscode';
 import { IDisposableRegistry, Resource } from '../../common/types';
 import { traceDecorators } from '../../logging';
-import { PythonEnvironment } from '../../pythonEnvironments/info';
-import { captureTelemetry } from '../../telemetry';
+import { captureTelemetry, sendTelemetryEvent } from '../../telemetry';
 import { Telemetry } from '../constants';
-import { findPreferredKernel, getKernelId } from '../jupyter/kernels/helpers';
+import { findPreferredKernel, getKernelId, getLanguageInNotebookMetadata } from '../jupyter/kernels/helpers';
 import {
     KernelConnectionMetadata,
     LiveKernelConnectionMetadata,
@@ -24,9 +23,12 @@ import {
     IJupyterSessionManagerFactory,
     INotebookProviderConnection
 } from '../types';
-import { isInterpreter } from './localKernelFinder';
 import { IRemoteKernelFinder } from './types';
-import { traceInfoIf } from '../../common/logger';
+import { traceError, traceInfoIfCI } from '../../common/logger';
+import { getResourceType } from '../common';
+import { PYTHON_LANGUAGE } from '../../common/constants';
+import { getTelemetrySafeLanguage } from '../../telemetry/helpers';
+import { sendKernelListTelemetry } from '../telemetry/kernelTelemetry';
 
 // This class searches for a kernel that matches the given kernel name.
 // First it searches on a global persistent state, then on the installed python interpreters,
@@ -52,29 +54,51 @@ export class RemoteKernelFinder implements IRemoteKernelFinder {
     }
     @traceDecorators.verbose('Find remote kernel spec')
     @captureTelemetry(Telemetry.KernelFinderPerf)
+    @captureTelemetry(Telemetry.KernelListingPerf, { kind: 'remote' })
     public async findKernel(
         resource: Resource,
         connInfo: INotebookProviderConnection | undefined,
-        option?: nbformat.INotebookMetadata | PythonEnvironment,
+        notebookMetadata?: nbformat.INotebookMetadata,
         _cancelToken?: CancellationToken
     ): Promise<KernelConnectionMetadata | undefined> {
-        // Get list of all of the specs
-        const kernels = await this.listKernels(resource, connInfo);
+        const resourceType = getResourceType(resource);
+        const telemetrySafeLanguage =
+            resourceType === 'interactive'
+                ? PYTHON_LANGUAGE
+                : getTelemetrySafeLanguage(getLanguageInNotebookMetadata(notebookMetadata) || '');
+        try {
+            // Get list of all of the specs
+            const kernels = await this.listKernels(resource, connInfo);
 
-        // Find the preferred kernel index from the list.
-        const notebookMetadata = option && !isInterpreter(option) ? option : undefined;
-        return findPreferredKernel(
-            kernels,
-            resource,
-            [],
-            notebookMetadata,
-            undefined,
-            this.preferredRemoteKernelIdProvider
-        );
+            // Find the preferred kernel index from the list.
+            const preferred = findPreferredKernel(
+                kernels,
+                resource,
+                [],
+                notebookMetadata,
+                undefined,
+                this.preferredRemoteKernelIdProvider
+            );
+            sendTelemetryEvent(Telemetry.PreferredKernel, undefined, {
+                result: preferred ? 'found' : 'notfound',
+                resourceType,
+                language: telemetrySafeLanguage
+            });
+            return preferred;
+        } catch (ex) {
+            sendTelemetryEvent(
+                Telemetry.PreferredKernel,
+                undefined,
+                { result: 'failed', resourceType, language: telemetrySafeLanguage },
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                ex as any,
+                true
+            );
+            traceError(`findKernel crashed`, ex);
+        }
     }
 
     // Talk to the remote server to determine sessions
-    @captureTelemetry(Telemetry.KernelListingPerf)
     public async listKernels(
         resource: Resource,
         connInfo: INotebookProviderConnection | undefined
@@ -112,9 +136,9 @@ export class RemoteKernelFinder implements IRemoteKernelFinder {
                     const numberOfConnections = liveKernel.connections
                         ? parseInt(liveKernel.connections.toString(), 10)
                         : 0;
-                    const activeKernel = running.find((active) => active.id === s.kernel.id) || {};
+                    const activeKernel = running.find((active) => active.id === s.kernel?.id) || {};
                     const matchingSpec: Partial<IJupyterKernelSpec> =
-                        specs.find((spec) => spec.name === s.kernel.name) || {};
+                        specs.find((spec) => spec.name === s.kernel?.name) || {};
 
                     const kernel: LiveKernelConnectionMetadata = {
                         kind: 'connectToLiveKernel',
@@ -122,11 +146,12 @@ export class RemoteKernelFinder implements IRemoteKernelFinder {
                             ...s.kernel,
                             ...matchingSpec,
                             ...activeKernel,
+                            name: s.kernel?.name || '',
                             lastActivityTime,
                             numberOfConnections,
-                            session: s
+                            model: s
                         },
-                        id: s.kernel.id
+                        id: s.kernel?.id || ''
                     };
                     return kernel;
                 });
@@ -134,8 +159,7 @@ export class RemoteKernelFinder implements IRemoteKernelFinder {
                 // Filter out excluded ids
                 const filtered = mappedLive.filter((k) => !this.kernelIdsToHide.has(k.kernelModel.id || ''));
                 const items = [...filtered, ...mappedSpecs];
-                traceInfoIf(
-                    !!process.env.VSC_JUPYTER_LOG_KERNEL_OUTPUT,
+                traceInfoIfCI(
                     `Kernel specs for ${resource?.toString() || 'undefined'} are \n ${JSON.stringify(
                         items,
                         undefined,
@@ -143,6 +167,7 @@ export class RemoteKernelFinder implements IRemoteKernelFinder {
                     )}`
                 );
 
+                sendKernelListTelemetry(resource, items);
                 return items;
             } finally {
                 if (sessionManager) {
@@ -150,6 +175,7 @@ export class RemoteKernelFinder implements IRemoteKernelFinder {
                 }
             }
         }
+        sendKernelListTelemetry(resource, []);
         return [];
     }
 

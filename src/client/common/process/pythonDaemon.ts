@@ -8,10 +8,9 @@ import { MessageConnection, RequestType, RequestType0 } from 'vscode-jsonrpc';
 import { PythonExecInfo } from '../../pythonEnvironments/exec';
 import { InterpreterInformation } from '../../pythonEnvironments/info';
 import { extractInterpreterInfo } from '../../pythonEnvironments/info/interpreter';
-import { BaseError } from '../errors/types';
 import { traceWarning } from '../logger';
 import { IPlatformService } from '../platform/types';
-import { BasePythonDaemon } from './baseDaemon';
+import { BasePythonDaemon, ConnectionClosedError, DaemonError } from './baseDaemon';
 import { PythonEnvInfo } from './internal/scripts';
 import {
     IPythonDaemonExecutionService,
@@ -21,18 +20,6 @@ import {
 } from './types';
 
 type ErrorResponse = { error?: string };
-
-export class ConnectionClosedError extends BaseError {
-    constructor(message: string) {
-        super('daemon', message);
-    }
-}
-
-export class DaemonError extends BaseError {
-    constructor(message: string) {
-        super('daemon', message);
-    }
-}
 export class PythonDaemonExecutionService extends BasePythonDaemon implements IPythonDaemonExecutionService {
     // eslint-disable-next-line @typescript-eslint/no-useless-constructor
     constructor(
@@ -47,7 +34,7 @@ export class PythonDaemonExecutionService extends BasePythonDaemon implements IP
     public async getInterpreterInformation(): Promise<InterpreterInformation | undefined> {
         try {
             this.throwIfRPCConnectionIsDead();
-            const request = new RequestType0<PythonEnvInfo & ErrorResponse, void, void>('get_interpreter_information');
+            const request = new RequestType0<PythonEnvInfo & ErrorResponse, void>('get_interpreter_information');
             const response = await this.sendRequestWithoutArgs(request);
             if (response.error) {
                 throw Error(response.error);
@@ -62,7 +49,7 @@ export class PythonDaemonExecutionService extends BasePythonDaemon implements IP
         try {
             this.throwIfRPCConnectionIsDead();
             type ExecutablePathResponse = ErrorResponse & { path: string };
-            const request = new RequestType0<ExecutablePathResponse, void, void>('get_executable');
+            const request = new RequestType0<ExecutablePathResponse, void>('get_executable');
             const response = await this.sendRequestWithoutArgs(request);
             if (response.error) {
                 throw new DaemonError(response.error);
@@ -80,7 +67,7 @@ export class PythonDaemonExecutionService extends BasePythonDaemon implements IP
         try {
             this.throwIfRPCConnectionIsDead();
             type ModuleInstalledResponse = ErrorResponse & { exists: boolean };
-            const request = new RequestType<{ module_name: string }, ModuleInstalledResponse, void, void>(
+            const request = new RequestType<{ module_name: string }, ModuleInstalledResponse, void>(
                 'is_module_installed'
             );
             const response = await this.sendRequest(request, { module_name: moduleName });

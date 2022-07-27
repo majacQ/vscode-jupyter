@@ -12,32 +12,36 @@
 // Licensed under the MIT License.
 
 import { inject, injectable, named } from 'inversify';
-import { CancellationToken, Disposable, Event, EventEmitter, Memento, Uri } from 'vscode';
+import { CancellationToken, Disposable, Event, EventEmitter, Memento, Uri, workspace } from 'vscode';
 import { IApplicationShell, ICommandManager, IWorkspaceService } from '../common/application/types';
+import { isCI } from '../common/constants';
 import { trackPackageInstalledIntoInterpreter } from '../common/installer/productInstaller';
 import { ProductNames } from '../common/installer/productNames';
 import { InterpreterUri } from '../common/installer/types';
+import { traceError, traceInfo, traceInfoIfCI } from '../common/logger';
+import { getDisplayPath } from '../common/platform/fs-paths';
 import {
     GLOBAL_MEMENTO,
     IDisposableRegistry,
     IExtensions,
     IMemento,
     InstallerResponse,
-    IPersistentStateFactory,
     Product,
     Resource
 } from '../common/types';
 import { createDeferred } from '../common/utils/async';
 import * as localize from '../common/utils/localize';
 import { isResource, noop } from '../common/utils/misc';
+import { StopWatch } from '../common/utils/stopWatch';
 import { PythonExtension, Telemetry } from '../datascience/constants';
 import { InterpreterPackages } from '../datascience/telemetry/interpreterPackages';
 import { IEnvironmentActivationService } from '../interpreter/activation/types';
 import { IInterpreterQuickPickItem, IInterpreterSelector } from '../interpreter/configuration/types';
 import { IInterpreterService } from '../interpreter/contracts';
 import { IWindowsStoreInterpreter } from '../interpreter/locators/types';
-import { PythonEnvironment } from '../pythonEnvironments/info';
-import { sendTelemetryEvent } from '../telemetry';
+import { EnvironmentType, PythonEnvironment } from '../pythonEnvironments/info';
+import { areInterpreterPathsSame } from '../pythonEnvironments/info/interpreter';
+import { captureTelemetry, sendTelemetryEvent } from '../telemetry';
 import {
     ILanguageServer,
     ILanguageServerProvider,
@@ -64,7 +68,8 @@ export class PythonApiProvider implements IPythonApiProvider {
     constructor(
         @inject(IExtensions) private readonly extensions: IExtensions,
         @inject(IDisposableRegistry) private readonly disposables: IDisposableRegistry,
-        @inject(IPythonExtensionChecker) private extensionChecker: IPythonExtensionChecker
+        @inject(IPythonExtensionChecker) private extensionChecker: IPythonExtensionChecker,
+        @inject(IWorkspaceService) private workspace: IWorkspaceService
     ) {
         const previouslyInstalled = this.extensionChecker.isPythonExtensionInstalled;
         if (!previouslyInstalled) {
@@ -87,10 +92,18 @@ export class PythonApiProvider implements IPythonApiProvider {
     }
 
     public setApi(api: PythonApi): void {
-        if (this.api.resolved) {
+        // Never allow accessing python API (we dont want to ever use the API and run code in untrusted API).
+        // Don't assume Python API will always be disabled in untrusted worksapces.
+        if (this.api.resolved || !this.workspace.isTrusted) {
             return;
         }
         this.api.resolve(api);
+
+        // Log experiment status here. Python extension is definitely loaded at this point.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const pythonConfig = workspace.getConfiguration('python', (null as any) as Uri);
+        const experimentsSection = pythonConfig.get('experiments');
+        traceInfo(`Experiment status for python is ${JSON.stringify(experimentsSection)}`);
     }
 
     private async init() {
@@ -125,13 +138,12 @@ export class PythonApiProvider implements IPythonApiProvider {
 @injectable()
 export class PythonExtensionChecker implements IPythonExtensionChecker {
     private extensionChangeHandler: Disposable | undefined;
-    private pythonExtensionId = PythonExtension;
     private waitingOnInstallPrompt?: Promise<void>;
     constructor(
         @inject(IExtensions) private readonly extensions: IExtensions,
-        @inject(IPersistentStateFactory) private readonly persistentStateFactory: IPersistentStateFactory,
         @inject(IApplicationShell) private readonly appShell: IApplicationShell,
-        @inject(ICommandManager) private readonly commandManager: ICommandManager
+        @inject(ICommandManager) private readonly commandManager: ICommandManager,
+        @inject(IWorkspaceService) private readonly workspace: IWorkspaceService
     ) {
         // If the python extension is not installed listen to see if anything does install it
         if (!this.isPythonExtensionInstalled) {
@@ -140,57 +152,32 @@ export class PythonExtensionChecker implements IPythonExtensionChecker {
     }
 
     public get isPythonExtensionInstalled() {
-        return this.extensions.getExtension(this.pythonExtensionId) !== undefined;
+        return this.extensions.getExtension(PythonExtension) !== undefined;
     }
     public get isPythonExtensionActive() {
-        return this.extensions.getExtension(this.pythonExtensionId)?.isActive === true;
+        return this.extensions.getExtension(PythonExtension)?.isActive === true;
     }
 
     public async showPythonExtensionInstallRequiredPrompt(): Promise<void> {
+        // If workspace is not trusted, then don't show prompt
+        if (!this.workspace.isTrusted) {
+            return;
+        }
         if (this.waitingOnInstallPrompt) {
             return this.waitingOnInstallPrompt;
         }
         // Ask user if they want to install and then wait for them to actually install it.
         const yes = localize.Common.bannerLabelYes();
         const no = localize.Common.bannerLabelNo();
+        sendTelemetryEvent(Telemetry.PythonExtensionNotInstalled, undefined, { action: 'displayed' });
         const answer = await this.appShell.showErrorMessage(localize.DataScience.pythonExtensionRequired(), yes, no);
         if (answer === yes) {
+            sendTelemetryEvent(Telemetry.PythonExtensionNotInstalled, undefined, { action: 'download' });
             await this.installPythonExtension();
+        } else {
+            sendTelemetryEvent(Telemetry.PythonExtensionNotInstalled, undefined, { action: 'dismissed' });
         }
     }
-
-    public async showPythonExtensionInstallRecommendedPrompt() {
-        const key = 'ShouldShowPythonExtensionInstallRecommendedPrompt';
-        const surveyPrompt = this.persistentStateFactory.createGlobalPersistentState(key, true);
-        if (surveyPrompt.value) {
-            const yes = localize.Common.bannerLabelYes();
-            const no = localize.Common.bannerLabelNo();
-            const doNotShowAgain = localize.Common.doNotShowAgain();
-
-            const promise = (this.waitingOnInstallPrompt = new Promise<void>(async (resolve) => {
-                const answer = await this.appShell.showWarningMessage(
-                    localize.DataScience.pythonExtensionRecommended(),
-                    yes,
-                    no,
-                    doNotShowAgain
-                );
-                switch (answer) {
-                    case yes:
-                        await this.installPythonExtension();
-                        break;
-                    case doNotShowAgain:
-                        await surveyPrompt.updateValue(false);
-                        break;
-                    default:
-                        break;
-                }
-                resolve();
-            }));
-            await promise;
-            this.waitingOnInstallPrompt = undefined;
-        }
-    }
-
     private async installPythonExtension() {
         // Have the user install python
         void this.commandManager.executeCommand('extension.open', PythonExtension);
@@ -243,7 +230,8 @@ const ProductMapping: { [key in Product]: JupyterProductToInstall } = {
     [Product.kernelspec]: JupyterProductToInstall.kernelspec,
     [Product.nbconvert]: JupyterProductToInstall.nbconvert,
     [Product.notebook]: JupyterProductToInstall.notebook,
-    [Product.pandas]: JupyterProductToInstall.pandas
+    [Product.pandas]: JupyterProductToInstall.pandas,
+    [Product.pip]: JupyterProductToInstall.pip
 };
 
 /* eslint-disable max-classes-per-file */
@@ -255,7 +243,7 @@ export class PythonInstaller implements IPythonInstaller {
     }
     constructor(
         @inject(IPythonApiProvider) private readonly apiProvider: IPythonApiProvider,
-        @inject(InterpreterPackages) private readonly interpreterPacakges: InterpreterPackages,
+        @inject(InterpreterPackages) private readonly interpreterPackages: InterpreterPackages,
         @inject(IMemento) @named(GLOBAL_MEMENTO) private readonly memento: Memento
     ) {}
 
@@ -263,15 +251,22 @@ export class PythonInstaller implements IPythonInstaller {
         product: Product,
         resource?: InterpreterUri,
         cancel?: CancellationToken,
-        reInstallAndUpdate?: boolean
+        reInstallAndUpdate?: boolean,
+        installPipIfRequired?: boolean
     ): Promise<InstallerResponse> {
         if (resource && !isResource(resource)) {
-            this.interpreterPacakges.trackPackages(resource);
+            this.interpreterPackages.trackPackages(resource);
         }
         let action: 'installed' | 'failed' | 'disabled' | 'ignored' = 'installed';
         try {
             const api = await this.apiProvider.getApi();
-            const result = await api.install(ProductMapping[product], resource, cancel, reInstallAndUpdate);
+            const result = await api.install(
+                ProductMapping[product],
+                resource,
+                cancel,
+                reInstallAndUpdate,
+                installPipIfRequired
+            );
             trackPackageInstalledIntoInterpreter(this.memento, product, resource).catch(noop);
             if (result === InstallerResponse.Installed) {
                 this._onInstalled.fire({ product, resource });
@@ -294,7 +289,6 @@ export class PythonInstaller implements IPythonInstaller {
             action = 'failed';
             throw ex;
         } finally {
-            product;
             sendTelemetryEvent(Telemetry.PythonModuleInstal, undefined, {
                 action,
                 moduleName: ProductNames.get(product)!
@@ -312,9 +306,22 @@ export class EnvironmentActivationService implements IEnvironmentActivationServi
         resource: Resource,
         interpreter?: PythonEnvironment
     ): Promise<NodeJS.ProcessEnv | undefined> {
-        return this.apiProvider
+        const stopWatch = new StopWatch();
+        const env = await this.apiProvider
             .getApi()
             .then((api) => api.getActivatedEnvironmentVariables(resource, interpreter, false));
+
+        const envType = interpreter?.envType;
+        sendTelemetryEvent(Telemetry.GetActivatedEnvironmentVariables, stopWatch.elapsedTime, {
+            envType,
+            failed: Object.keys(env || {}).length === 0
+        });
+        // We must get actiavted env variables for Conda env, if not running stuff against conda will not work.
+        // Hence we must log these as errors (so we can see them in jupyter logs).
+        if (envType === EnvironmentType.Conda) {
+            traceError(`Failed to get activated conda env variables for ${interpreter?.envName}: ${interpreter?.path}`);
+        }
+        return env;
     }
 }
 
@@ -327,24 +334,24 @@ export class InterpreterSelector implements IInterpreterSelector {
         return this.apiProvider.getApi().then((api) => api.getSuggestions(resource));
     }
 }
+
 // eslint-disable-next-line max-classes-per-file
 @injectable()
 export class InterpreterService implements IInterpreterService {
     private readonly didChangeInterpreter = new EventEmitter<void>();
+    private readonly didChangeInterpreters = new EventEmitter<void>();
     private eventHandlerAdded?: boolean;
+    private interpreterListCachePromise: Promise<PythonEnvironment[]> | undefined = undefined;
     constructor(
         @inject(IPythonApiProvider) private readonly apiProvider: IPythonApiProvider,
         @inject(IPythonExtensionChecker) private extensionChecker: IPythonExtensionChecker,
         @inject(IDisposableRegistry) private readonly disposables: IDisposableRegistry,
-        @inject(IWorkspaceService) private readonly workspace: IWorkspaceService
-    ) {}
-
-    public get onDidChangeInterpreter(): Event<void> {
+        @inject(IWorkspaceService) private workspace: IWorkspaceService
+    ) {
         if (this.extensionChecker.isPythonExtensionInstalled) {
-            if (this.extensionChecker.isPythonExtensionActive && !this.eventHandlerAdded) {
-                this.hookupOnDidChangeInterpreterEvent();
-            }
             if (!this.extensionChecker.isPythonExtensionActive) {
+                // This event may not fire. It only fires if we're the reason for python extension
+                // activation. VS code does not fire such an event itself if something else activates
                 this.apiProvider.onDidActivatePythonExtension(
                     this.hookupOnDidChangeInterpreterEvent,
                     this,
@@ -352,14 +359,33 @@ export class InterpreterService implements IInterpreterService {
                 );
             }
         }
+        this.workspace.onDidChangeWorkspaceFolders(this.onDidChangeWorkspaceFolders, this, disposables);
+    }
+
+    public get onDidChangeInterpreter(): Event<void> {
+        this.hookupOnDidChangeInterpreterEvent();
         return this.didChangeInterpreter.event;
     }
 
-    public getInterpreters(resource?: Uri): Promise<PythonEnvironment[]> {
-        return this.apiProvider.getApi().then((api) => api.getInterpreters(resource));
+    public get onDidChangeInterpreters(): Event<void> {
+        this.hookupOnDidChangeInterpreterEvent();
+        return this.didChangeInterpreters.event;
     }
+
+    @captureTelemetry(Telemetry.InterpreterListingPerf)
+    public getInterpreters(resource?: Uri): Promise<PythonEnvironment[]> {
+        this.hookupOnDidChangeInterpreterEvent();
+        // Cache result as it only changes when the interpreter list changes or we add more workspace folders
+        if (!this.interpreterListCachePromise) {
+            this.interpreterListCachePromise = this.getInterpretersImpl(resource);
+        }
+        return this.interpreterListCachePromise;
+    }
+
     private workspaceCachedActiveInterpreter = new Map<string, Promise<PythonEnvironment | undefined>>();
+    @captureTelemetry(Telemetry.ActiveInterpreterListingPerf)
     public getActiveInterpreter(resource?: Uri): Promise<PythonEnvironment | undefined> {
+        this.hookupOnDidChangeInterpreterEvent();
         const workspaceId = this.workspace.getWorkspaceFolderIdentifier(resource);
         let promise = this.workspaceCachedActiveInterpreter.get(workspaceId);
         if (!promise) {
@@ -373,12 +399,24 @@ export class InterpreterService implements IInterpreterService {
                         this.workspaceCachedActiveInterpreter.delete(workspaceId);
                     }
                 });
+                if (isCI) {
+                    promise
+                        .then((item) =>
+                            traceInfo(
+                                `Active Interpreter in Python API for ${resource?.toString()} is ${getDisplayPath(
+                                    item?.path
+                                )}`
+                            )
+                        )
+                        .catch(noop);
+                }
             }
         }
         return promise;
     }
 
     public async getInterpreterDetails(pythonPath: string, resource?: Uri): Promise<undefined | PythonEnvironment> {
+        this.hookupOnDidChangeInterpreterEvent();
         try {
             return await this.apiProvider.getApi().then((api) => api.getInterpreterDetails(pythonPath, resource));
         } catch {
@@ -386,8 +424,39 @@ export class InterpreterService implements IInterpreterService {
             return undefined;
         }
     }
+
+    private onDidChangeWorkspaceFolders() {
+        this.interpreterListCachePromise = undefined;
+    }
+    private async getInterpretersImpl(resource?: Uri): Promise<PythonEnvironment[]> {
+        // Python uses the resource to look up the workspace folder. For Jupyter
+        // we want all interpreters regardless of workspace folder so call this multiple times
+        const folders = this.workspace.workspaceFolders;
+        const all = folders
+            ? await Promise.all(folders.map((f) => this.apiProvider.getApi().then((api) => api.getInterpreters(f.uri))))
+            : await Promise.all([this.apiProvider.getApi().then((api) => api.getInterpreters(undefined))]);
+
+        // Remove dupes
+        const result: PythonEnvironment[] = [];
+        all.flat().forEach((p) => {
+            if (!result.find((r) => areInterpreterPathsSame(r.path, p.path))) {
+                result.push(p);
+            }
+        });
+        traceInfoIfCI(`Interpreter list for ${resource?.toString()} is ${result.map((i) => i.path).join('\n')}`);
+        return result;
+    }
+
     private hookupOnDidChangeInterpreterEvent() {
+        // Only do this once.
         if (this.eventHandlerAdded) {
+            return;
+        }
+        // Python may not be installed or active
+        if (!this.extensionChecker.isPythonExtensionInstalled) {
+            return;
+        }
+        if (!this.extensionChecker.isPythonExtensionActive) {
             return;
         }
         this.apiProvider
@@ -397,8 +466,17 @@ export class InterpreterService implements IInterpreterService {
                     this.eventHandlerAdded = true;
                     api.onDidChangeInterpreter(
                         () => {
-                            this.didChangeInterpreter.fire();
+                            this.interpreterListCachePromise = undefined;
                             this.workspaceCachedActiveInterpreter.clear();
+                            this.didChangeInterpreter.fire();
+                        },
+                        this,
+                        this.disposables
+                    );
+                    api.onDidChangeInterpreters(
+                        () => {
+                            this.interpreterListCachePromise = undefined;
+                            this.didChangeInterpreters.fire();
                         },
                         this,
                         this.disposables

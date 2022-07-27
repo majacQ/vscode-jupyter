@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import { inject, injectable } from 'inversify';
-import { NotebookCellKind, NotebookCellOutput, NotebookDocument, NotebookRange } from 'vscode';
+import { languages, NotebookCellKind, NotebookDocument } from 'vscode';
 import { IExtensionSingleActivationService } from '../../activation/types';
 import { IVSCodeNotebook } from '../../common/application/types';
 import { PYTHON_LANGUAGE } from '../../common/constants';
@@ -46,10 +46,6 @@ export class EmptyNotebookCellLanguageService implements IExtensionSingleActivat
         if (!isJupyterNotebook(document)) {
             return;
         }
-        // If connecting to a default kernel of Jupyter server, then we don't know the language of the kernel.
-        if (connection.kind === 'startUsingDefaultKernel') {
-            return;
-        }
         const editor = this.notebook.notebookEditors.find((item) => item.document === document);
         if (!editor) {
             return;
@@ -89,20 +85,12 @@ export class EmptyNotebookCellLanguageService implements IExtensionSingleActivat
         }
 
         const monacoLanguage = translateKernelLanguageToMonaco(language);
-        chainWithPendingUpdates(editor.document, (edit) => {
-            emptyCodeCells.forEach((cell) => {
+        chainWithPendingUpdates(editor.document, async () => {
+            await emptyCodeCells.map(async (cell) => {
                 if (monacoLanguage.toLowerCase() === cell.document.languageId) {
                     return;
                 }
-                edit.replaceNotebookCells(editor.document.uri, new NotebookRange(cell.index, cell.index + 1), [
-                    {
-                        kind: cell.kind,
-                        language: monacoLanguage,
-                        metadata: cell.metadata,
-                        outputs: cell.outputs.map((op) => new NotebookCellOutput(op.outputs)),
-                        source: cell.document.getText()
-                    }
-                ]);
+                return languages.setTextDocumentLanguage(cell.document, monacoLanguage).then(noop, noop);
             });
         }).then(noop, noop);
     }

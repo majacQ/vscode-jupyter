@@ -14,7 +14,7 @@ import { IPythonExtensionChecker } from '../../api/types';
 import { isTestExecution } from '../../common/constants';
 import { traceInfo } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
-import { IProcessServiceFactory } from '../../common/process/types';
+import { IProcessServiceFactory, IPythonExecutionFactory } from '../../common/process/types';
 import { IDisposableRegistry, Resource } from '../../common/types';
 import { Telemetry } from '../constants';
 import { KernelSpecConnectionMetadata, PythonKernelConnectionMetadata } from '../jupyter/kernels/types';
@@ -23,8 +23,10 @@ import { KernelDaemonPool } from './kernelDaemonPool';
 import { KernelEnvironmentVariablesService } from './kernelEnvVarsService';
 import { KernelProcess } from './kernelProcess';
 import { IKernelConnection, IKernelLauncher, IKernelProcess } from './types';
-import { CancellationError } from '../../common/cancellation';
+import { CancellationError, createPromiseFromCancellation } from '../../common/cancellation';
 import { sendKernelTelemetryWhenDone } from '../telemetry/telemetry';
+import { sendTelemetryEvent } from '../../telemetry';
+import { getTelemetrySafeErrorMessageFromPythonTraceback } from '../../common/errors/errorUtils';
 
 const PortFormatString = `kernelLauncherPortStart_{0}.tmp`;
 // Launches and returns a kernel process given a resource or python interpreter.
@@ -47,7 +49,8 @@ export class KernelLauncher implements IKernelLauncher {
         @inject(KernelEnvironmentVariablesService)
         private readonly kernelEnvVarsService: KernelEnvironmentVariablesService,
         @inject(IKernelDependencyService) private readonly kernelDependencyService: IKernelDependencyService,
-        @inject(IDisposableRegistry) private readonly disposables: IDisposableRegistry
+        @inject(IDisposableRegistry) private readonly disposables: IDisposableRegistry,
+        @inject(IPythonExecutionFactory) private readonly pythonExecFactory: IPythonExecutionFactory
     ) {}
 
     public static async cleanupStartPort() {
@@ -102,10 +105,14 @@ export class KernelLauncher implements IKernelLauncher {
             // If this is a python interpreter, make sure it has ipykernel
             if (kernelConnectionMetadata.interpreter) {
                 await this.kernelDependencyService.installMissingDependencies(
+                    resource,
                     kernelConnectionMetadata.interpreter,
                     cancelToken,
                     disableUI
                 );
+                if (cancelToken?.isCancellationRequested) {
+                    throw new CancellationError();
+                }
             }
 
             // Should be available now, wait with a timeout
@@ -123,6 +130,9 @@ export class KernelLauncher implements IKernelLauncher {
         cancelToken?: CancellationToken
     ): Promise<IKernelProcess> {
         const connection = await this.getKernelConnection(kernelConnectionMetadata);
+        if (cancelToken?.isCancellationRequested) {
+            throw new CancellationError();
+        }
         const kernelProcess = new KernelProcess(
             this.processExecutionFactory,
             this.daemonPool,
@@ -131,17 +141,35 @@ export class KernelLauncher implements IKernelLauncher {
             this.fs,
             resource,
             this.extensionChecker,
-            this.kernelEnvVarsService
+            this.kernelEnvVarsService,
+            this.pythonExecFactory
         );
-        await kernelProcess.launch(workingDirectory, timeout, cancelToken);
 
-        kernelProcess.exited(
-            () => {
+        try {
+            await Promise.race([
+                kernelProcess.launch(workingDirectory, timeout, cancelToken),
+                createPromiseFromCancellation({ token: cancelToken, cancelAction: 'reject' })
+            ]);
+        } catch (ex) {
+            void kernelProcess.dispose();
+            if (ex instanceof CancellationError || cancelToken?.isCancellationRequested) {
+                throw new CancellationError();
+            }
+            throw ex;
+        }
+
+        const disposable = kernelProcess.exited(
+            ({ exitCode, reason }) => {
+                sendTelemetryEvent(Telemetry.RawKernelSessionKernelProcessExited, undefined, {
+                    exitCode,
+                    exitReason: getTelemetrySafeErrorMessageFromPythonTraceback(reason)
+                });
                 KernelLauncher._usedPorts.delete(connection.control_port);
                 KernelLauncher._usedPorts.delete(connection.hb_port);
                 KernelLauncher._usedPorts.delete(connection.iopub_port);
                 KernelLauncher._usedPorts.delete(connection.shell_port);
                 KernelLauncher._usedPorts.delete(connection.stdin_port);
+                disposable.dispose();
             },
             this,
             this.disposables

@@ -6,11 +6,12 @@
 import { ChildProcess } from 'child_process';
 import { Subject } from 'rxjs/Subject';
 import { MessageConnection, NotificationType, RequestType, RequestType0 } from 'vscode-jsonrpc';
-import { traceInfo, traceWarning } from '../../common/logger';
+import { traceInfo } from '../../common/logger';
 import { IPlatformService } from '../../common/platform/types';
 import { BasePythonDaemon, ExecResponse } from '../../common/process/baseDaemon';
 import { IPythonExecutionService, ObservableExecutionResult, Output, SpawnOptions } from '../../common/process/types';
-import { IPythonKernelDaemon, PythonKernelDiedError } from './types';
+import { PythonKernelDiedError } from '../errors/pythonKernelDiedError';
+import { IPythonKernelDaemon } from './types';
 
 export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKernelDaemon {
     private started?: boolean;
@@ -29,7 +30,7 @@ export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKerne
         super(pythonExecutionService, platformService, pythonPath, proc, connection);
     }
     public async interrupt() {
-        const request = new RequestType0<void, void, void>('interrupt_kernel');
+        const request = new RequestType0<void, void>('interrupt_kernel');
         await this.sendRequestWithoutArgs(request);
     }
     public async kill() {
@@ -38,7 +39,7 @@ export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKerne
             return;
         }
         this.killed = true;
-        const request = new RequestType0<void, void, void>('kill_kernel');
+        const request = new RequestType0<void, void>('kill_kernel');
         await this.sendRequestWithoutArgs(request);
     }
     public async preWarm() {
@@ -47,7 +48,7 @@ export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKerne
         }
         this.preWarmed = true;
         this.monitorOutput();
-        const request = new RequestType0<void, void, void>('prewarm_kernel');
+        const request = new RequestType0<void, void>('prewarm_kernel');
 
         await this.sendRequestWithoutArgs(request);
     }
@@ -73,7 +74,9 @@ export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKerne
         this.monitorOutput();
 
         if (this.preWarmed) {
-            const request = new RequestType<{ args: string[] }, ExecResponse, void, void>('start_prewarmed_kernel');
+            // Making an assumption that the prewarmed kernel has the same environment.
+            traceInfo(`Using prewarmed kernel ...`);
+            const request = new RequestType<{ args: string[] }, ExecResponse, void>('start_prewarmed_kernel');
             await this.sendRequest(request, { args: [moduleName].concat(args) });
         } else {
             // No need of the output here, we'll tap into the output coming from daemon `this.outputObservale`.
@@ -87,6 +90,7 @@ export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKerne
             // This is why when we run `execModule` in the Kernel daemon, it finishes (comes back) quickly.
             // However in reality it is running in the background.
             // See `m_exec_module_observable` in `kernel_launcher_daemon.py`.
+            traceInfo('Starting kernel from scratch');
             await this.execModule(moduleName, args, options);
         }
 
@@ -102,9 +106,7 @@ export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKerne
         }
         this.outputHooked = true;
         // Message from daemon when kernel dies.
-        const KernelDiedNotification = new NotificationType<{ exit_code: string; reason?: string }, void>(
-            'kernel_died'
-        );
+        const KernelDiedNotification = new NotificationType<{ exit_code: string; reason?: string }>('kernel_died');
         let stdErr = '';
         this.connection.onNotification(KernelDiedNotification, (output) => {
             // If we have requested for kernel to be killed, don't raise kernel died error.
@@ -126,13 +128,7 @@ export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKerne
         this.outputObservable.subscribe(
             (out) => {
                 if (out.source === 'stderr') {
-                    // Don't call this.subject.error, as that can only be called once (hence can only be handled once).
-                    // Instead log this error & pass this only when the kernel dies.
                     stdErr += out.out;
-                    // If we have requested for kernel to be killed, don't raise kernel died error.
-                    if (!this.killed) {
-                        traceWarning(`Kernel ${this.proc.pid} as possibly died, StdErr from Kernel Process ${out.out}`);
-                    }
                 }
                 this.subject.next(out);
             },

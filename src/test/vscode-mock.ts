@@ -64,13 +64,13 @@ export function initialize() {
     generateMock('env');
     generateMock('debug');
     generateMock('scm');
-    generateMock('notebook');
+    generateMock('notebooks');
     generateNotebookMocks();
 
     const commands = new MockCommands();
     (mockedVSCode as any).commands = commands;
     mockedVSCodeNamespaces.commands = commands as any;
-    mockedVSCodeNamespaces.notebook?.setup((nb) => nb.notebookDocuments).returns(() => []);
+    mockedVSCodeNamespaces.workspace?.setup((ws) => ws.notebookDocuments).returns(() => []);
     mockedVSCodeNamespaces.window?.setup((w) => w.visibleNotebookEditors).returns(() => []);
     // Use mock clipboard fo testing purposes.
     const clipboard = new MockClipboard();
@@ -100,6 +100,7 @@ mockedVSCode.Disposable = vscodeMocks.vscMock.Disposable as any;
 mockedVSCode.ExtensionKind = vscodeMocks.vscMock.ExtensionKind;
 mockedVSCode.CodeAction = vscodeMocks.vscMock.CodeAction;
 mockedVSCode.EventEmitter = vscodeMocks.vscMock.EventEmitter;
+mockedVSCode.CancellationError = vscodeMocks.vscMock.CancellationError;
 mockedVSCode.CancellationTokenSource = vscodeMocks.vscMock.CancellationTokenSource;
 mockedVSCode.CompletionItemKind = vscodeMocks.vscMock.CompletionItemKind;
 mockedVSCode.SymbolKind = vscodeMocks.vscMock.SymbolKind;
@@ -113,6 +114,8 @@ mockedVSCode.SymbolInformation = vscodeMocks.vscMockExtHostedTypes.SymbolInforma
 mockedVSCode.CompletionItem = vscodeMocks.vscMockExtHostedTypes.CompletionItem;
 mockedVSCode.CompletionItemKind = vscodeMocks.vscMockExtHostedTypes.CompletionItemKind;
 mockedVSCode.CodeLens = vscodeMocks.vscMockExtHostedTypes.CodeLens;
+mockedVSCode.Diagnostic = vscodeMocks.vscMockExtHostedTypes.Diagnostic;
+mockedVSCode.CallHierarchyItem = vscodeMocks.vscMockExtHostedTypes.CallHierarchyItem;
 mockedVSCode.DiagnosticSeverity = vscodeMocks.vscMockExtHostedTypes.DiagnosticSeverity;
 mockedVSCode.SnippetString = vscodeMocks.vscMockExtHostedTypes.SnippetString;
 mockedVSCode.ConfigurationTarget = vscodeMocks.vscMockExtHostedTypes.ConfigurationTarget;
