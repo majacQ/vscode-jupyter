@@ -2004,7 +2004,7 @@
         "iconv-lite": "^0.4.21",
         "image-size": "^1.0.1",
         "inversify": "^5.1.1",
-        "is-online": "^9.0.1",
+        "is-online": "^10.0.0",
         "jquery": "^3.6.0",
         "jsonc-parser": "^2.3.1",
         "lodash": "^4.17.21",
