@@ -23,7 +23,14 @@
     color: var(--vscode-sideBar-foreground);
     text-align: left;
     font-weight: bold;
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/node-fetch-2.6.7
     border-right: 1px solid transparent;
+  =======
+    border-right-color: var(--vscode-editor-inactiveSelectionBackground);
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    font-weight: var(--vscode-font-weight);
+  >>>>>>> joyceerhl/dataviewer-fonts
 }
 
 .react-grid-cell {
@@ -60,7 +67,11 @@
 
 .slick-header-column.ui-state-default,
 .slick-group-header-column.ui-state-default {
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/node-fetch-2.6.7
     border-right: 1px solid transparent;
+  =======
+    border-right-color: var(--vscode-editor-inactiveSelectionBackground);
+  >>>>>>> joyceerhl/dataviewer-fonts
     display: flex;
 }
 
@@ -162,6 +173,11 @@ input.editor-text {
     position: absolute;
 }
 
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/node-fetch-2.6.7
 .refresh-button {
     padding-left: 28px;
+  =======
+.header-cell-button {
+    position: absolute;
+  >>>>>>> joyceerhl/dataviewer-fonts
 }

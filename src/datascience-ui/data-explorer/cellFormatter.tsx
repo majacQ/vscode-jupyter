@@ -40,16 +40,31 @@ class CellFormatter extends React.Component<ICellFormatterProps> {
         );
     }
 
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/node-fetch-2.6.7
+  =======
+    private renderBool(value: boolean) {
+        return (
+            <div className="formatter cell-formatter" role="gridcell" title={value.toString()}>
+                <span>{value.toString()}</span>
+            </div>
+        );
+    }
+
+  >>>>>>> joyceerhl/dataviewer-fonts
     private renderNumber(value: number) {
         let val = generateDisplayValue(value);
         const isIndexColumn = this.props.columnDef.id === '0';
 
         return (
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/node-fetch-2.6.7
             <div
                 className={`number-formatter cell-formatter${isIndexColumn ? ' index-column-formatter' : ''}`}
                 role="gridcell"
                 title={val}
             >
+  =======
+            <div className="formatter number-formatter" role="gridcell" title={val}>
+  >>>>>>> joyceerhl/dataviewer-fonts
                 <span>{val}</span>
             </div>
         );

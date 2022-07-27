@@ -592,7 +592,11 @@ export class ReactSlickGrid extends React.Component<ISlickGridProps, ISlickGridS
     }
 
     private renderFilterCell = (_e: Slick.EventData, args: Slick.OnHeaderRowCellRenderedEventArgs<Slick.SlickData>) => {
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/node-fetch-2.6.7
         if (args.column.field === this.props.idProperty) {
+  =======
+        if (args.column.id === '0') {
+  >>>>>>> joyceerhl/dataviewer-fonts
             const tooltipText = getLocString('DataScience.clearFilters', 'Clear all filters');
             ReactDOM.render(
                 <div

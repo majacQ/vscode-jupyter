@@ -199,7 +199,16 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
                         <div className="icon-python breadcrumb-file-icon" />
                         <span>{this.state.fileName}</span>
                         {this.state.fileName ? (
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/node-fetch-2.6.7
                             <div className="codicon codicon-chevron-right breadcrumb-codicon" />
+  =======
+                            <Image
+                                baseTheme={this.props.baseTheme}
+                                class="image-button-image"
+                                codicon="chevron-right"
+                                image={ImageName.Cancel}
+                            />
+  >>>>>>> joyceerhl/dataviewer-fonts
                         ) : undefined}
                         <span>{breadcrumbText}</span>
                     </div>
