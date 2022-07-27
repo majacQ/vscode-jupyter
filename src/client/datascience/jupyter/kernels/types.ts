@@ -5,28 +5,21 @@
 
 import type { KernelMessage, Session } from '@jupyterlab/services';
 import type { Observable } from 'rxjs/Observable';
-import type {
-    CancellationToken,
-    Event,
-    NotebookCell,
-    NotebookController,
-    NotebookDocument,
-    QuickPickItem
-} from 'vscode';
-import type { ServerStatus } from '../../../../datascience-ui/interactive-common/mainState';
+import type { Event, NotebookCell, NotebookController, NotebookDocument, QuickPickItem } from 'vscode';
 import type { IAsyncDisposable, Resource } from '../../../common/types';
 import type { PythonEnvironment } from '../../../pythonEnvironments/info';
 import type {
     IJupyterKernel,
     IJupyterKernelSpec,
-    INotebook,
+    IJupyterSession,
     INotebookProviderConnection,
     InterruptResult,
     KernelSocketInformation
 } from '../../types';
 import type * as nbformat from '@jupyterlab/nbformat';
 
-export type LiveKernelModel = IJupyterKernel & Partial<IJupyterKernelSpec> & { model: Session.IModel | undefined };
+export type LiveKernelModel = IJupyterKernel &
+    Partial<IJupyterKernelSpec> & { model: Session.IModel | undefined; notebook?: { path?: string } };
 
 export enum NotebookCellRunState {
     Running = 1,
@@ -65,24 +58,6 @@ export type KernelSpecConnectionMetadata = Readonly<{
     id: string;
 }>;
 /**
- * Connection metadata for Kernels started using default kernel.
- * Here we tell Jupyter to start a session and let it decide what kernel is to be started.
- * (could apply to either local or remote sessions when dealing with Jupyter Servers).
- */
-export type DefaultKernelConnectionMetadata = Readonly<{
-    /**
-     * This will be empty as we do not have a kernel spec.
-     * Left for type compatibility with other types that have kernel spec property.
-     */
-    kernelSpec?: IJupyterKernelSpec;
-    /**
-     * Python interpreter will be used for intellisense & the like.
-     */
-    interpreter?: PythonEnvironment;
-    kind: 'startUsingDefaultKernel';
-    id: string;
-}>;
-/**
  * Connection metadata for Kernels started using Python interpreter.
  * These are not necessarily raw (it could be plain old Jupyter Kernels, where we register Python interpreter as a kernel).
  * We can have KernelSpec information here as well, however that is totally optional.
@@ -102,23 +77,18 @@ export type PythonKernelConnectionMetadata = Readonly<{
 export type KernelConnectionMetadata =
     | Readonly<LiveKernelConnectionMetadata>
     | Readonly<KernelSpecConnectionMetadata>
-    | Readonly<PythonKernelConnectionMetadata>
-    | Readonly<DefaultKernelConnectionMetadata>;
+    | Readonly<PythonKernelConnectionMetadata>;
 
 /**
  * Connection metadata for local kernels. Makes it easier to not have to check for the live connection type.
  */
 export type LocalKernelConnectionMetadata =
     | Readonly<KernelSpecConnectionMetadata>
-    | Readonly<PythonKernelConnectionMetadata>
-    | Readonly<DefaultKernelConnectionMetadata>;
+    | Readonly<PythonKernelConnectionMetadata>;
 
 export interface IKernelSpecQuickPickItem<T extends KernelConnectionMetadata = KernelConnectionMetadata>
     extends QuickPickItem {
     selection: T;
-}
-export interface IKernelSelectionListProvider<T extends KernelConnectionMetadata = KernelConnectionMetadata> {
-    getKernelSelections(resource: Resource, cancelToken?: CancellationToken): Promise<IKernelSpecQuickPickItem<T>[]>;
 }
 
 export interface IKernel extends IAsyncDisposable {
@@ -131,21 +101,23 @@ export interface IKernel extends IAsyncDisposable {
      */
     readonly resourceUri: Resource;
     readonly kernelConnectionMetadata: Readonly<KernelConnectionMetadata>;
-    readonly onStatusChanged: Event<ServerStatus>;
+    readonly onStatusChanged: Event<KernelMessage.Status>;
     readonly onDisposed: Event<void>;
     readonly onStarted: Event<void>;
     readonly onRestarted: Event<void>;
     readonly onWillRestart: Event<void>;
     readonly onWillInterrupt: Event<void>;
-    readonly status: ServerStatus;
+    readonly onPreExecute: Event<NotebookCell>;
+    readonly status: KernelMessage.Status;
     readonly disposed: boolean;
+    readonly disposing: boolean;
     /**
      * Kernel information, used to save in ipynb in the metadata.
      * Crucial for non-python notebooks, else we save the incorrect information.
      */
     readonly info?: KernelMessage.IInfoReplyMsg['content'];
     readonly kernelSocket: Observable<KernelSocketInformation | undefined>;
-    readonly notebook?: INotebook;
+    readonly session?: IJupyterSession;
     start(options?: { disableUI?: boolean }): Promise<void>;
     interrupt(): Promise<InterruptResult>;
     restart(): Promise<void>;
@@ -168,7 +140,7 @@ export interface IKernelProvider extends IAsyncDisposable {
     onDidStartKernel: Event<IKernel>;
     onDidRestartKernel: Event<IKernel>;
     onDidDisposeKernel: Event<IKernel>;
-    onKernelStatusChanged: Event<{ status: ServerStatus; kernel: IKernel }>;
+    onKernelStatusChanged: Event<{ status: KernelMessage.Status; kernel: IKernel }>;
     /**
      * Get hold of the active kernel for a given Notebook.
      */

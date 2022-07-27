@@ -21,7 +21,9 @@ import {
     notebooks,
     NotebookCellOutput,
     NotebookCellExecutionState,
-    CancellationTokenSource
+    CancellationTokenSource,
+    Event,
+    EventEmitter
 } from 'vscode';
 import { concatMultilineString, formatStreamText } from '../../../../datascience-ui/common';
 import { createErrorOutput } from '../../../../datascience-ui/common/cellFactory';
@@ -43,13 +45,15 @@ import {
     translateCellDisplayOutput,
     translateErrorOutput
 } from '../../notebook/helpers/helpers';
-import { ICellHashProvider, IDataScienceErrorHandler, IJupyterSession, INotebook } from '../../types';
+import { ICellHash, ICellHashProvider, IDataScienceErrorHandler, IJupyterSession } from '../../types';
 import { isPythonKernelConnection } from './helpers';
 import { IKernel, KernelConnectionMetadata, NotebookCellRunState } from './types';
 import { Kernel } from '@jupyterlab/services';
 import { CellOutputDisplayIdTracker } from './cellDisplayIdTracker';
 import { disposeAllDisposables } from '../../../common/helpers';
 import { CellHashProviderFactory } from '../../editor-integration/cellHashProviderFactory';
+import { InteractiveWindowView } from '../../notebook/constants';
+import { BaseError } from '../../../common/errors/types';
 
 // Helper interface for the set_next_input execute reply payload
 interface ISetNextInputPayload {
@@ -104,6 +108,9 @@ export class CellExecution implements IDisposable {
     public get result(): Promise<NotebookCellRunState> {
         return this._result.promise;
     }
+    public get preExecute(): Event<NotebookCell> {
+        return this._preExecuteEmitter.event;
+    }
     /**
      * To be used only in tests.
      */
@@ -140,6 +147,8 @@ export class CellExecution implements IDisposable {
     private request: Kernel.IShellFuture<KernelMessage.IExecuteRequestMsg, KernelMessage.IExecuteReplyMsg> | undefined;
     private readonly disposables: IDisposable[] = [];
     private readonly prompts = new Set<CancellationTokenSource>();
+    private _preExecuteEmitter = new EventEmitter<NotebookCell>();
+    private session?: IJupyterSession;
     private constructor(
         public readonly cell: NotebookCell,
         private readonly errorHandler: IDataScienceErrorHandler,
@@ -212,7 +221,8 @@ export class CellExecution implements IDisposable {
             cellHashProvider
         );
     }
-    public async start(notebook: INotebook) {
+    public async start(session: IJupyterSession) {
+        this.session = session;
         if (this.cancelHandled) {
             traceCellMessage(this.cell, 'Not starting as it was cancelled');
             return;
@@ -246,7 +256,7 @@ export class CellExecution implements IDisposable {
         this.stopWatch.reset();
 
         // Begin the request that will modify our cell.
-        this.execute(notebook.session)
+        this.execute(session)
             .catch((e) => this.completedWithErrors(e))
             .finally(() => this.dispose())
             .catch(noop);
@@ -295,15 +305,32 @@ export class CellExecution implements IDisposable {
         this.lastUsedStreamOutput = undefined;
     }
     private completedWithErrors(error: Partial<Error>) {
+        traceWarning(`Cell completed with errors`, error);
         traceCellMessage(this.cell, 'Completed with errors');
         this.sendPerceivedCellExecute();
 
         traceCellMessage(this.cell, 'Update with error state & output');
-        this.execution?.appendOutput([translateErrorOutput(createErrorOutput(error))]).then(noop, noop);
+        // No need to append errors related to failures in Kernel execution in output.
+        // We will display messages for those.
+        if (!(error instanceof BaseError)) {
+            this.execution?.appendOutput([translateErrorOutput(createErrorOutput(error))]).then(noop, noop);
+        }
 
         this.endCellTask('failed');
         this._completed = true;
-        this.errorHandler.handleError((error as unknown) as Error).ignoreErrors();
+
+        // If the kernel is dead, then no point handling errors.
+        // We have other code that deals with kernels dying.
+        // We're only concerned with failures in execution while kernel is still running.
+        let handleError = true;
+        if (this.session?.disposed || this.session?.status === 'terminating' || this.session?.status === 'dead') {
+            handleError = false;
+        }
+        if (handleError) {
+            this.errorHandler
+                .handleKernelError((error as unknown) as Error, 'execution', this.kernelConnection)
+                .ignoreErrors();
+        }
         traceCellMessage(this.cell, 'Completed with errors, & resolving');
         this._result.resolve(NotebookCellRunState.Error);
     }
@@ -326,7 +353,7 @@ export class CellExecution implements IDisposable {
 
         this.endCellTask(success);
         this._completed = true;
-        traceCellMessage(this.cell, 'Completed successfully & resolving');
+        traceCellMessage(this.cell, `Completed successfully & resolving with status = ${success}`);
         this._result.resolve(runState);
     }
     private endCellTask(success: 'success' | 'failed' | 'cancelled') {
@@ -424,9 +451,8 @@ export class CellExecution implements IDisposable {
     }
 
     private async execute(session: IJupyterSession) {
-        const code = this.cell.metadata?.interactive?.modifiedSource ?? this.cell.document.getText();
         traceCellMessage(this.cell, 'Send code for execution');
-        await this.executeCodeCell(code, session);
+        await this.executeCodeCell(this.cell.document.getText().replace(/\r\n/g, '\n'), session);
     }
 
     private async executeCodeCell(code: string, session: IJupyterSession) {
@@ -444,11 +470,34 @@ export class CellExecution implements IDisposable {
         };
 
         try {
+            // Compute the hash for the cell we're about to execute if on the interactive window
+            let hash: ICellHash | undefined = undefined;
+            if (this.cell.notebook.notebookType === InteractiveWindowView) {
+                hash = await this.cellHashProvider.addCellHash(this.cell);
+
+                // If using ipykernel 6, we need to set the IPYKERNEL_CELL_NAME so that
+                // debugging can work. However this code is harmless for IPYKERNEL 5 so just always do it
+                // No need to wait for the result.
+                session.requestExecute(
+                    {
+                        code: `import os;os.environ["IPYKERNEL_CELL_NAME"] = '${hash?.runtimeFile}'`,
+                        silent: false,
+                        stop_on_error: false,
+                        allow_stdin: true,
+                        store_history: false
+                    },
+                    true
+                );
+            }
+
+            // At this point we're about to ACTUALLY execute some code. Fire an event to indicate that
+            this._preExecuteEmitter.fire(this.cell);
+
             // For Jupyter requests, silent === don't output, while store_history === don't update execution count
             // https://jupyter-client.readthedocs.io/en/stable/api/client.html#jupyter_client.KernelClient.execute
             this.request = session.requestExecute(
                 {
-                    code: code.replace(/\r\n/g, '\n'),
+                    code: hash?.code || code,
                     silent: false,
                     stop_on_error: false,
                     allow_stdin: true,
@@ -459,7 +508,7 @@ export class CellExecution implements IDisposable {
             );
         } catch (ex) {
             traceError(`Cell execution failed without request, for cell Index ${this.cell.index}`, ex);
-            return this.completedWithErrors(new Error('Session cannot generate requests'));
+            return this.completedWithErrors(ex);
         }
         // Listen to messages and update our cell execution state appropriately
         // Keep track of our clear state
@@ -496,6 +545,7 @@ export class CellExecution implements IDisposable {
             this.completedSuccessfully();
             traceCellMessage(this.cell, 'Executed successfully in executeCell');
         } catch (ex) {
+            traceError('Error in waiting for cell to complete', ex);
             // @jupyterlab/services throws a `Canceled` error when the kernel is interrupted.
             // Such an error must be ignored.
             if (ex && ex instanceof Error && ex.message.includes('Canceled')) {
@@ -621,7 +671,7 @@ export class CellExecution implements IDisposable {
                     cancelToken.token
                 )
                 .then((v) => {
-                    session.sendInputReply(v || '');
+                    session.sendInputReply({ value: v || '', status: 'ok' });
                 }, noop);
 
             this.prompts.delete(cancelToken);

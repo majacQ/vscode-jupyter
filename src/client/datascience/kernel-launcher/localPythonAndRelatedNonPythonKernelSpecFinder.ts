@@ -22,6 +22,7 @@ import { LocalKnownPathKernelSpecFinder } from './localKnownPathKernelSpecFinder
 import { captureTelemetry } from '../../telemetry';
 import { Telemetry } from '../constants';
 import { areInterpreterPathsSame } from '../../pythonEnvironments/info/interpreter';
+import { getDisplayPath } from '../../common/platform/fs-paths';
 
 export const isDefaultPythonKernelSpecName = /python\d*.?\d*$/;
 
@@ -47,15 +48,18 @@ export class LocalPythonAndRelatedNonPythonKernelSpecFinder extends LocalKernelS
         super(fs, workspaceService, extensionChecker);
     }
     @captureTelemetry(Telemetry.KernelListingPerf, { kind: 'localPython' })
-    public async listKernelSpecs(resource: Resource, cancelToken?: CancellationToken) {
+    public async listKernelSpecs(resource: Resource, ignoreCache?: boolean, cancelToken?: CancellationToken) {
         // Get an id for the workspace folder, if we don't have one, use the fsPath of the resource
         const workspaceFolderId =
             this.workspaceService.getWorkspaceFolderIdentifier(
                 resource,
                 resource?.fsPath || this.workspaceService.rootPath
             ) || 'root';
-        return this.listKernelsWithCache(workspaceFolderId, true, () =>
-            this.listKernelsImplementation(resource, cancelToken)
+        return this.listKernelsWithCache(
+            workspaceFolderId,
+            true,
+            () => this.listKernelsImplementation(resource, cancelToken),
+            ignoreCache
         );
     }
     private async listKernelsImplementation(
@@ -188,7 +192,11 @@ export class LocalPythonAndRelatedNonPythonKernelSpecFinder extends LocalKernelS
                         (kernelspec.name.toLowerCase().match(isDefaultPythonKernelSpecName) ||
                             kernelspec.display_name.toLowerCase() === 'python 3 (ipykernel)')
                     ) {
-                        traceInfo(`Hiding default kernel spec ${kernelspec.display_name}, ${kernelspec.argv[0]}`);
+                        traceInfo(
+                            `Hiding default kernel spec ${kernelspec.display_name}, ${getDisplayPath(
+                                kernelspec.argv[0]
+                            )}`
+                        );
                         return false;
                     }
                     return true;
@@ -239,7 +247,9 @@ export class LocalPythonAndRelatedNonPythonKernelSpecFinder extends LocalKernelS
                                 );
                             } catch (ex) {
                                 traceError(
-                                    `Failed to get interpreter details for Kernel Spec ${k.specFile} with interpreter path ${k.metadata?.interpreter?.path}`,
+                                    `Failed to get interpreter details for Kernel Spec ${getDisplayPath(
+                                        k.specFile
+                                    )} with interpreter path ${getDisplayPath(k.metadata?.interpreter?.path)}`,
                                     ex
                                 );
                                 return;
@@ -379,7 +389,17 @@ export class LocalPythonAndRelatedNonPythonKernelSpecFinder extends LocalKernelS
     ): Promise<IJupyterKernelSpec[]> {
         traceInfoIfCI(`Finding kernel specs for interpreters: ${interpreters.map((i) => i.path).join('\n')}`);
         // Find all the possible places to look for this resource
-        const paths = await this.findKernelPathsOfAllInterpreters(interpreters);
+        const [interpreterPaths, rootSpecPaths] = await Promise.all([
+            this.findKernelPathsOfAllInterpreters(interpreters),
+            this.jupyterPaths.getKernelSpecRootPaths()
+        ]);
+        // Exclude the glbal paths from the list.
+        // What could happens is, we could have a global python interpreter and that returns a global path.
+        // But we could have a kernel spec in global path that points to a completely different interpreter.
+        // We already have a way of identifying the interpreter associated with a global kernelspec.
+        // Hence exclude global paths from the list of interpreter specific paths (as global paths are NOT interpreter specific).
+        const paths = interpreterPaths.filter((item) => !rootSpecPaths.includes(item.kernelSearchPath));
+
         traceInfoIfCI(
             `Finding kernel specs for paths: ${paths
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -441,7 +461,7 @@ export class LocalPythonAndRelatedNonPythonKernelSpecFinder extends LocalKernelS
      */
     private async findKernelPathsOfAllInterpreters(
         interpreters: PythonEnvironment[]
-    ): Promise<(string | { interpreter: PythonEnvironment; kernelSearchPath: string })[]> {
+    ): Promise<{ interpreter: PythonEnvironment; kernelSearchPath: string }[]> {
         const kernelSpecPathsAlreadyListed = new Set<string>();
         return interpreters
             .map((interpreter) => {

@@ -1,7 +1,7 @@
 {
     "name": "jupyter",
     "displayName": "Jupyter",
-    "version": "2021.10.100",
+    "version": "2021.11.100",
     "description": "Jupyter notebook support, interactive programming and computing that supports Intellisense, debugging and more.",
     "publisher": "ms-toolsai",
     "enableProposedApi": true,
@@ -28,7 +28,7 @@
         "theme": "light"
     },
     "engines": {
-        "vscode": "1.62.0-insider"
+        "vscode": "^1.63.0-insiders"
     },
     "keywords": [
         "jupyter",
@@ -68,6 +68,7 @@
         "onCommand:jupyter.openVariableView",
         "onCommand:jupyter.selectNativeJupyterUriFromToolBar",
         "onCommand:jupyter.clearSavedJupyterUris",
+        "onCommand:jupyter.filterKernels",
         "onNotebook:jupyter-notebook",
         "onNotebook:interactive"
     ],
@@ -215,6 +216,11 @@
                 "icon": "$(bug)",
                 "category": "Jupyter",
                 "enablement": "notebookKernelCount > 0 && !jupyter.notebookeditor.debuggingInProgress && !jupyter.notebookeditor.runByLineInProgress"
+            },
+            {
+                "command": "jupyter.filterKernels",
+                "title": "Filter Kernels",
+                "category": "Jupyter"
             },
             {
                 "command": "jupyter.runByLine",
@@ -793,31 +799,31 @@
                     "command": "jupyter.notebookeditor.restartkernel",
                     "title": "%jupyter.command.jupyter.restartkernel.title%",
                     "group": "navigation@1",
-                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && jupyter.notebookeditor.canrestartNotebookkernel && config.notebook.globalToolbar != true"
+                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && jupyter.notebookeditor.canrestartNotebookkernel && config.notebook.globalToolbar != true && jupyter.kernel.isjupyter"
                 },
                 {
                     "command": "jupyter.notebookeditor.interruptkernel",
                     "title": "%jupyter.command.jupyter.interruptkernel.title%",
                     "group": "overflow@1",
-                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && jupyter.notebookeditor.canInterruptNotebookKernel && config.notebook.globalToolbar != true"
+                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && jupyter.notebookeditor.canInterruptNotebookKernel && config.notebook.globalToolbar != true && jupyter.kernel.isjupyter"
                 },
                 {
                     "command": "jupyter.openVariableView",
                     "title": "%jupyter.command.jupyter.openVariableView.title%",
                     "group": "navigation@2",
-                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && config.notebook.globalToolbar != true"
+                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && config.notebook.globalToolbar != true && jupyter.ispythonnotebook && jupyter.kernel.isjupyter"
                 },
                 {
                     "command": "jupyter.openOutlineView",
                     "title": "%jupyter.command.jupyter.openOutlineView.title%",
                     "group": "navigation@3",
-                    "when": "notebookType == 'jupyter-notebook' && config.jupyter.showOutlineButtonInNotebookToolbar && isWorkspaceTrusted && config.notebook.globalToolbar != true"
+                    "when": "notebookType == 'jupyter-notebook' && config.jupyter.showOutlineButtonInNotebookToolbar && config.notebook.globalToolbar != true && jupyter.kernel.isjupyter"
                 },
                 {
                     "command": "jupyter.notebookeditor.export",
                     "title": "%DataScience.notebookExportAs%",
                     "group": "navigation@4",
-                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && config.notebook.globalToolbar != true"
+                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && config.notebook.globalToolbar != true && jupyter.ispythonnotebook"
                 },
                 {
                     "command": "jupyter.selectNativeJupyterUriFromToolBar",
@@ -830,27 +836,27 @@
                 {
                     "command": "jupyter.notebookeditor.restartkernel",
                     "group": "navigation/execute@1",
-                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted"
+                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && jupyter.kernel.isjupyter"
                 },
                 {
                     "command": "jupyter.notebookeditor.interruptkernel",
                     "group": "navigation/execute@2",
-                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted"
+                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && jupyter.kernel.isjupyter"
                 },
                 {
                     "command": "jupyter.openVariableView",
                     "group": "navigation@1",
-                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted"
+                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && jupyter.ispythonnotebook && jupyter.kernel.isjupyter"
                 },
                 {
                     "command": "jupyter.openOutlineView",
                     "group": "navigation@2",
-                    "when": "notebookType == 'jupyter-notebook' && config.jupyter.showOutlineButtonInNotebookToolbar && isWorkspaceTrusted"
+                    "when": "notebookType == 'jupyter-notebook' && config.jupyter.showOutlineButtonInNotebookToolbar"
                 },
                 {
                     "command": "jupyter.notebookeditor.export",
                     "group": "Jupyter",
-                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted"
+                    "when": "notebookType == 'jupyter-notebook' && isWorkspaceTrusted && jupyter.ispythonnotebook"
                 }
             ],
             "notebook/cell/title": [
@@ -1531,7 +1537,7 @@
                 "jupyter.notebookFileRoot": {
                     "type": "string",
                     "default": "${fileDirname}",
-                    "description": "Set the root directory for loading files for the Interactive window.",
+                    "description": "Set the root directory for running notebooks and the Interactive window.",
                     "scope": "resource"
                 },
                 "jupyter.searchForJupyter": {
@@ -1766,6 +1772,42 @@
                         ]
                     ]
                 },
+                "jupyter.kernels.filter": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "enum": [
+                                    "jupyterKernelspec",
+                                    "pythonEnvironment"
+                                ]
+                            },
+                            "path": {
+                                "type": "string",
+                                "markdownDescription": "Fully qualified path to the kernel spec or the python enviornment. \nE.g. `~/miniconda3/envs/sample/bin/python`."
+                            },
+                            "required": [
+                                "type",
+                                "path"
+                            ]
+                        }
+                    },
+                    "markdownDescription": "List of Jupyter Kernels and/or python environments that are to be excluded from the Kernel picker.",
+                    "scope": "machine-overridable",
+                    "examples": [
+                        [
+                            {
+                                "type": "jupyterKernelspec",
+                                "path": "/usr/share/jupyter/kernels/sample/kernelspec.json"
+                            },
+                            {
+                                "type": "jupyterKernelspec",
+                                "path": "~/miniconda3/envs/sample/scripts/python.exe"
+                            }
+                        ]
+                    ]
+                },
                 "jupyter.interactiveWindowMode": {
                     "type": "string",
                     "enum": [
@@ -1782,6 +1824,17 @@
                     "default": false,
                     "description": "Uncomment shell assignments (#!), line magic (#!%) and cell magic (#!%%) when parsing code cells.",
                     "scope": "resource"
+                },
+                "jupyter.pythonExportMethod": {
+                    "type": "string",
+                    "enum": [
+                        "direct",
+                        "commentMagics",
+                        "nbconvert"
+                    ],
+                    "default": "direct",
+                    "description": "The method to use when exporting a notebook to a Python file. 'direct' will copy over the code directly as is. 'commentMagics' will comment out lines starting with line magics (%), cell magics (%%), and shell commands(!). 'nbconvert' will install nbconvert and use that for the conversion which can translate iPython syntax into Python syntax.",
+                    "scope": "application"
                 },
                 "jupyter.runStartupCommands": {
                     "type": "array",
@@ -1800,6 +1853,24 @@
                     "default": true,
                     "description": "Show the Outline button in the Jupyter notebook toolbar.",
                     "scope": "resource"
+                },
+                "jupyter.newCellOnRunLast": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Append a new empty cell to an interactive window file on running the currently last cell.",
+                    "scope": "resource"
+                },
+                "jupyter.pylanceHandlesNotebooks": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Determines if pylance's experimental notebook support is used or not",
+                    "scope": "machine"
+                },
+                "jupyter.pythonCompletionTriggerCharacters": {
+                    "type": "string",
+                    "default": ".%",
+                    "description": "Characters which trigger auto completion on a python jupyter kernel (requires reload of VS code)",
+                    "scope": "machine"
                 }
             }
         },
@@ -1915,6 +1986,7 @@
         "@jupyterlab/services": "^6.1.17",
         "@lumino/widgets": "^1.28.0",
         "@nteract/messaging": "^7.0.0",
+        "@vscode/jupyter-lsp-middleware": "^0.2.23",
         "ansi-to-html": "^0.6.7",
         "arch": "^2.1.0",
         "bootstrap": "^4.3.1",
@@ -1936,17 +2008,17 @@
         "jquery": "^3.6.0",
         "jsonc-parser": "^2.0.3",
         "lodash": "^4.17.21",
-        "log4js": "^6.1.2",
+        "log4js": "^6.4.1",
         "md5": "^2.2.1",
         "named-js-regexp": "^1.3.3",
-        "node-fetch": "^2.6.1",
+        "node-fetch": "^2.6.7",
         "node-stream-zip": "^1.6.0",
         "pdfkit": "^0.12.1",
         "portfinder": "^1.0.25",
         "re-resizable": "~6.5.5",
-        "react": "^16.5.2",
+        "react": "^17.0.2",
         "react-data-grid": "^6.0.2-0",
-        "react-dom": "^16.5.2",
+        "react-dom": "^17.0.2",
         "react-draggable": "^4.4.2",
         "react-redux": "^7.1.1",
         "react-svg-pan-zoom": "^3.1.0",

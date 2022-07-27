@@ -146,13 +146,13 @@ export namespace ExtensionSurveyBanner {
 }
 
 export namespace DataScience {
+    export const warnWhenSelectingKernelWithUnSupportedPythonVersion = localize(
+        'DataScience.warnWhenSelectingKernelWithUnSupportedPythonVersion',
+        'The version of Python associated with the selected kernel is no longer supported. Please consider selecting a different kernel.'
+    );
     export const pythonExtensionRequiredToRunNotebook = localize(
         'DataScience.pythonExtensionRequiredToRunNotebook',
         'Python Extension required to run Python notebooks.'
-    );
-    export const newNotebookUI = localize(
-        'DataScience.newNotebookUI',
-        "Welcome to VS Code's new notebook experience!  We think you'll find it faster and more pleasing to use. [Learn more...](https://aka.ms/NewNotebookUI)"
     );
     export const customizeLayout = localize('DataScience.customizeLayout', 'Customize Layout');
     export const pythonExtensionRequired = localize(
@@ -378,16 +378,35 @@ export namespace DataScience {
     );
     export const sessionStartFailedWithKernel = localize(
         'DataScience.sessionStartFailedWithKernel',
-        "Failed to start a session for the Kernel '{0}'. \nView Jupyter [log](command:{1}) for further details."
+        "Failed to start the Kernel '{0}'. \nView Jupyter [log](command:jupyter.viewOutput) for further details."
     );
-    export const kernelTimeout = localize(
-        'DataScience.kernelTimeout',
-        'Timed out waiting to get a heartbeat from kernel process. \nView Jupyter [log](command:{0}) for further details.'
+    export const failedToStartKernel = localize('DataScience.failedToStartKernel', 'Failed to start the Kernel.');
+    export const failedToRestartKernel = localize('DataScience.failedToRestartKernel', 'Failed to restart the Kernel.');
+    export const failedToInterruptKernel = localize(
+        'DataScience.failedToInterruptKernel',
+        'Failed to interrupt the Kernel.'
+    );
+    export const rawKernelStartFailedDueToTimeout = localize(
+        'DataScience.rawKernelStartFailedDueToTimeout',
+        "Unable to start Kernel '{0}' due to connection timeout. \nView Jupyter [log](command:jupyter.viewOutput) for further details."
+    );
+    export const viewJupyterLogForFurtherInfo = localize(
+        'DataScience.viewJupyterLogForFurtherInfo',
+        'View Jupyter [log](command:jupyter.viewOutput) for further details.'
     );
     export const kernelDied = localize(
         'DataScience.kernelDied',
-        'The kernel died. View Jupyter [log](command:{0}) for further details. \nError: {1}...'
+        'The kernel died. Error: {0}... View Jupyter [log](command:jupyter.viewOutput) for further details.'
     );
+    export const kernelDiedWithoutError = localize(
+        'DataScience.kernelDiedWithoutError',
+        "The kernel '{0}' died. View Jupyter [log](command:jupyter.viewOutput) for further details."
+    );
+    export const cannotRunCellKernelIsDead = localize(
+        'DataScience.cannotRunCellKernelIsDead',
+        "Cannot run cells, as the kernel '{0}' is dead."
+    );
+    export const showJupyterLogs = localize('jupyter.showJupyterLogs', 'Show Jupyter Logs.');
     export const executingCode = localize('DataScience.executingCode', 'Executing Cell');
     export const collapseAll = localize('DataScience.collapseAll', 'Collapse all cell inputs');
     export const expandAll = localize('DataScience.expandAll', 'Expand all cell inputs');
@@ -395,6 +414,7 @@ export namespace DataScience {
     export const expandSingle = localize('DataScience.expandSingle', 'Expand');
     export const exportKey = localize('DataScience.export', 'Export as Jupyter notebook');
     export const restartServer = localize('DataScience.restartServer', 'Restart Jupyter Kernel');
+    export const restartKernel = localize('DataScience.restartKernel', 'Restart Kernel');
     export const undo = localize('DataScience.undo', 'Undo');
     export const redo = localize('DataScience.redo', 'Redo');
     export const save = localize('DataScience.save', 'Save file');
@@ -577,6 +597,10 @@ export namespace DataScience {
     export const serverNotStarted = localize('DataScience.serverNotStarted', 'Not Started');
     export const selectKernel = localize('DataScience.selectKernel', 'Change Kernel');
     export const selectDifferentKernel = localize('DataScience.selectDifferentKernel', 'Select a different Kernel');
+    export const kernelFilterPlaceholder = localize(
+        'jupyter.kernel.filter.placeholder',
+        'Choose the kernels that are available in the kernel picker.'
+    );
     export const selectDifferentJupyterInterpreter = localize(
         'DataScience.selectDifferentJupyterInterpreter',
         'Change Interpreter'
@@ -636,7 +660,7 @@ export namespace DataScience {
     export const debugStopCommandTitle = localize('DataScience.debugStopCommandTitle', 'Stop');
     export const runCurrentCellAndAddBelow = localize(
         'DataScience.runCurrentCellAndAddBelow',
-        'Run current and add cell below'
+        'Run current cell and add empty cell below'
     );
     export const jupyterDebuggerNotInstalledError = localize(
         'DataScience.jupyterDebuggerNotInstalledError',
@@ -689,14 +713,6 @@ export namespace DataScience {
         'DataScience.instructionComments',
         '# To add a new cell, type "{0}"\n# To add a new markdown cell, type "{0} [markdown]"\n'
     );
-    export const invalidNotebookFileError = localize(
-        'DataScience.invalidNotebookFileError',
-        'Notebook is not in the correct format. Check the file for correct json.'
-    );
-    export const invalidNotebookFileErrorFormat = localize(
-        'DataScience.invalidNotebookFileError',
-        '{0} is not a valid notebook file. Check the file for correct json.'
-    );
     export const nativeEditorTitle = localize('DataScience.nativeEditorTitle', 'Notebook Editor');
     export const untitledNotebookFileName = localize('DataScience.untitledNotebookFileName', 'Untitled');
     export const dirtyNotebookMessage1 = localize(
@@ -728,7 +744,7 @@ export namespace DataScience {
     export const openExportFileNo = localize('DataScience.openExportFileNo', 'No');
     export const exportFailedGeneralMessage = localize(
         'DataScience.exportFailedGeneralMessage',
-        `Please check the 'Python' [output](command:python.viewOutput) panel for further details.`
+        `Please check the 'Jupyter' [output](command:jupyter.viewOutput) panel for further details.`
     );
     export const exportToPDFDependencyMessage = localize(
         'DataScience.exportToPDFDependencyMessage',
@@ -952,6 +968,24 @@ export namespace DataScience {
     );
     export const noNotebookToDebug = localize('DataScience.noNotebookToDebug', 'No active notebook document to debug.');
     export const cantStartDebugging = localize('DataScience.cantStartDebugging', "Can't start debugging.");
+    export const importingIpynb = localize('DataScience.importingIpynb', 'Importing notebook file');
+    export const exportingToFormat = localize('DataScience.exportingToFormat', 'Exporting to {0}');
+    export const kernelCategoryForJupyterSession = localize(
+        'jupyter.kernel.category.jupyterSession',
+        'Jupyter Session'
+    );
+    export const kernelCategoryForJupyterKernel = localize('jupyter.kernel.category.jupyterKernel', 'Jupyter Kernel');
+    export const kernelCategoryForConda = localize('jupyter.kernel.category.conda', 'Conda Env');
+    export const kernelCategoryForPoetry = localize('jupyter.kernel.category.poetry', 'Poetry Env');
+    export const kernelCategoryForPipEnv = localize('jupyter.kernel.category.pipenv', 'Pipenv Env');
+    export const kernelCategoryForPyEnv = localize('jupyter.kernel.category.pyenv', 'PyEnv Env');
+    export const kernelCategoryForGlobal = localize('jupyter.kernel.category.global', 'Global Env');
+    export const kernelCategoryForVirtual = localize('jupyter.kernel.category.virtual', 'Virtual Env');
+
+    export const fileSeemsToBeInterferingWithKernelStartup = localize(
+        'DataScience.fileSeemsToBeInterferingWithKernelStartup',
+        "The file '{0}' seems to be overriding built in modules and interfering with the startup of the kernel. Consider renaming the file and starting the kernel again.."
+    );
 }
 
 // Skip using vscode-nls and instead just compute our strings based on key values. Key values

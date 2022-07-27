@@ -9,7 +9,7 @@ import { CancellationToken, CancellationTokenSource } from 'vscode';
 import { IApplicationShell, IWorkspaceService } from '../../common/application/types';
 import { Cancellation } from '../../common/cancellation';
 import { WrappedError } from '../../common/errors/types';
-import { traceError, traceInfo } from '../../common/logger';
+import { traceInfo } from '../../common/logger';
 import { IConfigurationService, IDisposableRegistry, IOutputChannel } from '../../common/types';
 import * as localize from '../../common/utils/localize';
 import { noop } from '../../common/utils/misc';
@@ -18,10 +18,7 @@ import { IInterpreterService } from '../../interpreter/contracts';
 import { IServiceContainer } from '../../ioc/types';
 import { PythonEnvironment } from '../../pythonEnvironments/info';
 import { captureTelemetry, sendTelemetryEvent } from '../../telemetry';
-import { JupyterSessionStartError } from '../baseJupyterSession';
 import { Identifiers, Telemetry } from '../constants';
-import { ILocalKernelFinder, IRemoteKernelFinder } from '../kernel-launcher/types';
-import { trackKernelResourceInformation } from '../telemetry/telemetry';
 import {
     IJupyterConnection,
     IJupyterExecution,
@@ -33,12 +30,9 @@ import {
     INotebookServerOptions,
     JupyterServerUriHandle
 } from '../types';
-import { JupyterSelfCertsError } from './jupyterSelfCertsError';
+import { JupyterSelfCertsError } from '../errors/jupyterSelfCertsError';
 import { createRemoteConnectionInfo, expandWorkingDir } from './jupyterUtils';
-import { JupyterWaitForIdleError } from './jupyterWaitForIdleError';
-import { kernelConnectionMetadataHasKernelSpec } from './kernels/helpers';
-import { KernelSelector } from './kernels/kernelSelector';
-import { KernelConnectionMetadata } from './kernels/types';
+import { JupyterWaitForIdleError } from '../errors/jupyterWaitForIdleError';
 import { NotebookStarter } from './notebookStarter';
 
 const LocalHosts = ['localhost', '127.0.0.1', '::1'];
@@ -56,7 +50,6 @@ export class JupyterExecutionBase implements IJupyterExecution {
         private readonly disposableRegistry: IDisposableRegistry,
         private readonly workspace: IWorkspaceService,
         private readonly configuration: IConfigurationService,
-        private readonly kernelSelector: KernelSelector,
         private readonly notebookStarter: NotebookStarter,
         private readonly appShell: IApplicationShell,
         private readonly jupyterOutputChannel: IOutputChannel,
@@ -126,10 +119,6 @@ export class JupyterExecutionBase implements IJupyterExecution {
         return Cancellation.race(async () => {
             let result: INotebookServer | undefined;
             let connection: IJupyterConnection | undefined;
-            let kernelConnectionMetadata = options.kernelConnection;
-            let kernelConnectionMetadataPromise: Promise<KernelConnectionMetadata | undefined> = Promise.resolve<
-                KernelConnectionMetadata | undefined
-            >(kernelConnectionMetadata);
             traceInfo(`Connecting to ${options ? options.purpose : 'unknown type of'} server`);
             const allowUI = !options || options.allowUI();
             const kernelSpecCancelSource = new CancellationTokenSource();
@@ -140,18 +129,6 @@ export class JupyterExecutionBase implements IJupyterExecution {
             }
             const isLocalConnection = !options || !options.uri;
 
-            if (isLocalConnection && !options.kernelConnection) {
-                const kernelFinder = this.serviceContainer.get<ILocalKernelFinder>(ILocalKernelFinder);
-                // Get hold of the kernelspec and corresponding (matching) interpreter that'll be used as the spec.
-                // We can do this in parallel, while starting the server (faster).
-                traceInfo(`Getting kernel specs for ${options ? options.purpose : 'unknown type of'} server`);
-                kernelConnectionMetadataPromise = kernelFinder.findKernel(
-                    undefined,
-                    options.metadata,
-                    kernelSpecCancelSource.token
-                );
-            }
-
             // Try to connect to our jupyter process. Check our setting for the number of tries
             let tryCount = 1;
             const maxTries = this.configuration.getSettings(undefined).jupyterLaunchRetries;
@@ -159,10 +136,7 @@ export class JupyterExecutionBase implements IJupyterExecution {
             while (tryCount <= maxTries && !this.disposed) {
                 try {
                     // Start or connect to the process
-                    [connection, kernelConnectionMetadata] = await Promise.all([
-                        this.startOrConnect(options, cancelToken),
-                        kernelConnectionMetadataPromise
-                    ]);
+                    connection = await this.startOrConnect(options, cancelToken);
 
                     if (!connection.localLaunch && LocalHosts.includes(connection.hostName.toLowerCase())) {
                         sendTelemetryEvent(Telemetry.ConnectRemoteJupyterViaLocalHost);
@@ -170,57 +144,18 @@ export class JupyterExecutionBase implements IJupyterExecution {
                     // Create a server tha  t we will then attempt to connect to.
                     result = this.serviceContainer.get<INotebookServer>(INotebookServer);
 
-                    // In a remote non guest situation, figure out a kernel spec too.
-                    if (
-                        (!kernelConnectionMetadata ||
-                            !kernelConnectionMetadataHasKernelSpec(kernelConnectionMetadata)) &&
-                        connection &&
-                        !options.skipSearchingForKernel
-                    ) {
-                        const kernelFinder = this.serviceContainer.get<IRemoteKernelFinder>(IRemoteKernelFinder);
-                        kernelConnectionMetadata = await kernelFinder.findKernel(
-                            options.resource,
-                            connection,
-                            options.metadata,
-                            cancelToken
-                        );
-                    }
-
                     // Populate the launch info that we are starting our server with
                     const launchInfo: INotebookServerLaunchInfo = {
                         connectionInfo: connection!,
-                        kernelConnectionMetadata,
                         workingDir: options ? options.workingDir : undefined,
                         uri: options ? options.uri : undefined,
                         purpose: options ? options.purpose : uuid(),
                         disableUI: !allowUI
                     };
-                    // If we were not provided a kernel connection, this means we changed the connection here.
-                    if (!options.kernelConnection) {
-                        trackKernelResourceInformation(options.resource, {
-                            kernelConnection: launchInfo.kernelConnectionMetadata
-                        });
-                    }
                     // eslint-disable-next-line no-constant-condition
-                    while (true) {
-                        try {
-                            traceInfo(
-                                `Connecting to process for ${options ? options.purpose : 'unknown type of'} server`
-                            );
-                            await result.connect(launchInfo, cancelToken);
-                            traceInfo(
-                                `Connection complete for ${options ? options.purpose : 'unknown type of'} server`
-                            );
-                            break;
-                        } catch (ex) {
-                            traceError('Failed to connect to server', ex);
-                            if (ex instanceof JupyterSessionStartError && isLocalConnection && allowUI) {
-                                sendTelemetryEvent(Telemetry.AskUserForNewJupyterKernel);
-                                void this.kernelSelector.askForLocalKernel(options?.resource);
-                            }
-                            throw ex;
-                        }
-                    }
+                    traceInfo(`Connecting to process for ${options ? options.purpose : 'unknown type of'} server`);
+                    await result.connect(launchInfo, cancelToken);
+                    traceInfo(`Connection complete for ${options ? options.purpose : 'unknown type of'} server`);
 
                     sendTelemetryEvent(
                         isLocalConnection ? Telemetry.ConnectLocalJupyter : Telemetry.ConnectRemoteJupyter

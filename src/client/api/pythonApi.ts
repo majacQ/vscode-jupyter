@@ -18,7 +18,8 @@ import { isCI } from '../common/constants';
 import { trackPackageInstalledIntoInterpreter } from '../common/installer/productInstaller';
 import { ProductNames } from '../common/installer/productNames';
 import { InterpreterUri } from '../common/installer/types';
-import { traceInfo, traceInfoIfCI } from '../common/logger';
+import { traceError, traceInfo, traceInfoIfCI } from '../common/logger';
+import { getDisplayPath } from '../common/platform/fs-paths';
 import {
     GLOBAL_MEMENTO,
     IDisposableRegistry,
@@ -26,19 +27,19 @@ import {
     IMemento,
     InstallerResponse,
     Product,
-    ProductInstallStatus,
     Resource
 } from '../common/types';
 import { createDeferred } from '../common/utils/async';
 import * as localize from '../common/utils/localize';
 import { isResource, noop } from '../common/utils/misc';
+import { StopWatch } from '../common/utils/stopWatch';
 import { PythonExtension, Telemetry } from '../datascience/constants';
 import { InterpreterPackages } from '../datascience/telemetry/interpreterPackages';
 import { IEnvironmentActivationService } from '../interpreter/activation/types';
 import { IInterpreterQuickPickItem, IInterpreterSelector } from '../interpreter/configuration/types';
 import { IInterpreterService } from '../interpreter/contracts';
 import { IWindowsStoreInterpreter } from '../interpreter/locators/types';
-import { PythonEnvironment } from '../pythonEnvironments/info';
+import { EnvironmentType, PythonEnvironment } from '../pythonEnvironments/info';
 import { areInterpreterPathsSame } from '../pythonEnvironments/info/interpreter';
 import { captureTelemetry, sendTelemetryEvent } from '../telemetry';
 import {
@@ -229,7 +230,8 @@ const ProductMapping: { [key in Product]: JupyterProductToInstall } = {
     [Product.kernelspec]: JupyterProductToInstall.kernelspec,
     [Product.nbconvert]: JupyterProductToInstall.nbconvert,
     [Product.notebook]: JupyterProductToInstall.notebook,
-    [Product.pandas]: JupyterProductToInstall.pandas
+    [Product.pandas]: JupyterProductToInstall.pandas,
+    [Product.pip]: JupyterProductToInstall.pip
 };
 
 /* eslint-disable max-classes-per-file */
@@ -249,7 +251,8 @@ export class PythonInstaller implements IPythonInstaller {
         product: Product,
         resource?: InterpreterUri,
         cancel?: CancellationToken,
-        reInstallAndUpdate?: boolean
+        reInstallAndUpdate?: boolean,
+        installPipIfRequired?: boolean
     ): Promise<InstallerResponse> {
         if (resource && !isResource(resource)) {
             this.interpreterPackages.trackPackages(resource);
@@ -257,7 +260,13 @@ export class PythonInstaller implements IPythonInstaller {
         let action: 'installed' | 'failed' | 'disabled' | 'ignored' = 'installed';
         try {
             const api = await this.apiProvider.getApi();
-            const result = await api.install(ProductMapping[product], resource, cancel, reInstallAndUpdate);
+            const result = await api.install(
+                ProductMapping[product],
+                resource,
+                cancel,
+                reInstallAndUpdate,
+                installPipIfRequired
+            );
             trackPackageInstalledIntoInterpreter(this.memento, product, resource).catch(noop);
             if (result === InstallerResponse.Installed) {
                 this._onInstalled.fire({ product, resource });
@@ -286,15 +295,6 @@ export class PythonInstaller implements IPythonInstaller {
             });
         }
     }
-
-    public async isProductVersionCompatible(
-        product: Product,
-        semVerRequirement: string,
-        resource?: PythonEnvironment
-    ): Promise<ProductInstallStatus> {
-        const api = await this.apiProvider.getApi();
-        return api.isProductVersionCompatible(product, semVerRequirement, resource);
-    }
 }
 
 // eslint-disable-next-line max-classes-per-file
@@ -306,9 +306,22 @@ export class EnvironmentActivationService implements IEnvironmentActivationServi
         resource: Resource,
         interpreter?: PythonEnvironment
     ): Promise<NodeJS.ProcessEnv | undefined> {
-        return this.apiProvider
+        const stopWatch = new StopWatch();
+        const env = await this.apiProvider
             .getApi()
             .then((api) => api.getActivatedEnvironmentVariables(resource, interpreter, false));
+
+        const envType = interpreter?.envType;
+        sendTelemetryEvent(Telemetry.GetActivatedEnvironmentVariables, stopWatch.elapsedTime, {
+            envType,
+            failed: Object.keys(env || {}).length === 0
+        });
+        // We must get actiavted env variables for Conda env, if not running stuff against conda will not work.
+        // Hence we must log these as errors (so we can see them in jupyter logs).
+        if (envType === EnvironmentType.Conda) {
+            traceError(`Failed to get activated conda env variables for ${interpreter?.envName}: ${interpreter?.path}`);
+        }
+        return env;
     }
 }
 
@@ -326,6 +339,7 @@ export class InterpreterSelector implements IInterpreterSelector {
 @injectable()
 export class InterpreterService implements IInterpreterService {
     private readonly didChangeInterpreter = new EventEmitter<void>();
+    private readonly didChangeInterpreters = new EventEmitter<void>();
     private eventHandlerAdded?: boolean;
     private interpreterListCachePromise: Promise<PythonEnvironment[]> | undefined = undefined;
     constructor(
@@ -351,6 +365,11 @@ export class InterpreterService implements IInterpreterService {
     public get onDidChangeInterpreter(): Event<void> {
         this.hookupOnDidChangeInterpreterEvent();
         return this.didChangeInterpreter.event;
+    }
+
+    public get onDidChangeInterpreters(): Event<void> {
+        this.hookupOnDidChangeInterpreterEvent();
+        return this.didChangeInterpreters.event;
     }
 
     @captureTelemetry(Telemetry.InterpreterListingPerf)
@@ -383,7 +402,11 @@ export class InterpreterService implements IInterpreterService {
                 if (isCI) {
                     promise
                         .then((item) =>
-                            traceInfo(`Active Interpreter in Python API for ${resource?.toString()} is ${item?.path}`)
+                            traceInfo(
+                                `Active Interpreter in Python API for ${resource?.toString()} is ${getDisplayPath(
+                                    item?.path
+                                )}`
+                            )
                         )
                         .catch(noop);
                 }
@@ -446,6 +469,14 @@ export class InterpreterService implements IInterpreterService {
                             this.interpreterListCachePromise = undefined;
                             this.workspaceCachedActiveInterpreter.clear();
                             this.didChangeInterpreter.fire();
+                        },
+                        this,
+                        this.disposables
+                    );
+                    api.onDidChangeInterpreters(
+                        () => {
+                            this.interpreterListCachePromise = undefined;
+                            this.didChangeInterpreters.fire();
                         },
                         this,
                         this.disposables

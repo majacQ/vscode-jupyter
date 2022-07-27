@@ -9,6 +9,7 @@ import { IPythonExtensionChecker } from '../../api/types';
 import { IWorkspaceService } from '../../common/application/types';
 import { PYTHON_LANGUAGE } from '../../common/constants';
 import { traceDecorators, traceError, traceInfo, traceInfoIfCI } from '../../common/logger';
+import { getDisplayPath } from '../../common/platform/fs-paths';
 import { IFileSystem } from '../../common/platform/types';
 import { ReadWrite } from '../../common/types';
 import { testOnlyMethod } from '../../common/utils/decorators';
@@ -20,6 +21,7 @@ import { IJupyterKernelSpec } from '../types';
 
 type KernelSpecFileWithContainingInterpreter = { interpreter?: PythonEnvironment; kernelSpecFile: string };
 export const isDefaultPythonKernelSpecSpecName = /python\s\d*.?\d*$/;
+export const oldKernelsSpecFolderName = '__old_vscode_kernelspecs';
 
 @injectable()
 export abstract class LocalKernelSpecFinderBase {
@@ -55,11 +57,12 @@ export abstract class LocalKernelSpecFinderBase {
     protected async listKernelsWithCache(
         cacheKey: string,
         dependsOnPythonExtension: boolean,
-        finder: () => Promise<(KernelSpecConnectionMetadata | PythonKernelConnectionMetadata)[]>
+        finder: () => Promise<(KernelSpecConnectionMetadata | PythonKernelConnectionMetadata)[]>,
+        ignoreCache?: boolean
     ): Promise<(KernelSpecConnectionMetadata | PythonKernelConnectionMetadata)[]> {
         // If we have already searched for this resource, then use that.
         const result = this.kernelSpecCache.get(cacheKey);
-        if (result) {
+        if (result && !ignoreCache) {
             // If python extension is now installed & was not installed previously, then ignore the previous cache.
             if (
                 result.usesPython &&
@@ -114,6 +117,10 @@ export abstract class LocalKernelSpecFinderBase {
         interpreter?: PythonEnvironment,
         cancelToken?: CancellationToken
     ): Promise<IJupyterKernelSpec | undefined> {
+        // This is a backup folder for old kernels created by us.
+        if (specPath.includes(oldKernelsSpecFolderName)) {
+            return;
+        }
         // If we have not already loaded this kernel spec, then load it
         if (!this.pathToKernelSpec.has(specPath)) {
             this.pathToKernelSpec.set(specPath, this.loadKernelSpec(specPath, interpreter, cancelToken));
@@ -140,9 +147,13 @@ export abstract class LocalKernelSpecFinderBase {
         interpreter?: PythonEnvironment,
         cancelToken?: CancellationToken
     ): Promise<IJupyterKernelSpec | undefined> {
+        // This is a backup folder for old kernels created by us.
+        if (specPath.includes(oldKernelsSpecFolderName)) {
+            return;
+        }
         let kernelJson: ReadWrite<IJupyterKernelSpec>;
         try {
-            traceInfo(`Loading kernelspec from ${specPath} for ${interpreter?.path}`);
+            traceInfo(`Loading kernelspec from ${getDisplayPath(specPath)} for ${getDisplayPath(interpreter?.path)}`);
             kernelJson = JSON.parse(await this.fs.readLocalFile(specPath));
         } catch {
             traceError(`Failed to parse kernelspec ${specPath}`);

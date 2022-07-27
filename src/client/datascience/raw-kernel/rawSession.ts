@@ -5,12 +5,13 @@ import { ISignal, Signal } from '@lumino/signaling';
 import * as uuid from 'uuid/v4';
 import { getTelemetrySafeErrorMessageFromPythonTraceback } from '../../common/errors/errorUtils';
 import '../../common/extensions';
-import { traceError } from '../../common/logger';
+import { traceError, traceInfoIfCI } from '../../common/logger';
 import { IDisposable, Resource } from '../../common/types';
-import { createDeferred, sleep, TimedOutError } from '../../common/utils/async';
+import { createDeferred, sleep } from '../../common/utils/async';
 import { noop } from '../../common/utils/misc';
 import { sendTelemetryEvent } from '../../telemetry';
 import { Telemetry } from '../constants';
+import { KernelConnectionTimeoutError } from '../errors/kernelConnectionTimeoutError';
 import { KernelConnectionMetadata } from '../jupyter/kernels/types';
 import { IKernelProcess } from '../kernel-launcher/types';
 import { ISessionWithSocket, KernelSocketInformation } from '../types';
@@ -23,7 +24,7 @@ ZMQ Kernel connection can pretend to be a jupyterlab Session
 */
 export class RawSession implements ISessionWithSocket {
     public isDisposed: boolean = false;
-    public readonly kernelConnectionMetadata: KernelConnectionMetadata | undefined;
+    public readonly kernelConnectionMetadata: KernelConnectionMetadata;
     private isDisposing?: boolean;
 
     // Note, ID is the ID of this session
@@ -32,20 +33,36 @@ export class RawSession implements ISessionWithSocket {
     private _id: string;
     private _clientID: string;
     private _kernel: RawKernel;
-    private readonly _statusChanged: Signal<this, Kernel.Status>;
+    private readonly _statusChanged: Signal<this, KernelMessage.Status>;
     private readonly _kernelChanged: Signal<this, Session.ISessionConnection.IKernelChangedArgs>;
+    private readonly _terminated: Signal<this, void>;
     private readonly _ioPubMessage: Signal<this, KernelMessage.IIOPubMessage>;
     private readonly _connectionStatusChanged: Signal<this, Kernel.ConnectionStatus>;
     private readonly exitHandler: IDisposable;
+    private readonly signaling: typeof import('@lumino/signaling');
+    private _jupyterLabServices?: typeof import('@jupyterlab/services');
+    private cellExecutedSuccessfully?: boolean;
+    public get atleastOneCellExecutedSuccessfully() {
+        return this.cellExecutedSuccessfully === true;
+    }
+    private get jupyterLabServices() {
+        if (!this._jupyterLabServices) {
+            // Lazy load jupyter lab for faster extension loading.
+            // eslint-disable-next-line @typescript-eslint/no-require-imports
+            this._jupyterLabServices = require('@jupyterlab/services') as typeof import('@jupyterlab/services'); // NOSONAR
+        }
+        return this._jupyterLabServices;
+    }
 
     // RawSession owns the lifetime of the kernel process and will dispose it
     constructor(public kernelProcess: IKernelProcess, public readonly resource: Resource) {
         this.kernelConnectionMetadata = kernelProcess.kernelConnectionMetadata;
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const signaling = require('@lumino/signaling') as typeof import('@lumino/signaling');
-        this._statusChanged = new signaling.Signal<this, Kernel.Status>(this);
+        const signaling = (this.signaling = require('@lumino/signaling') as typeof import('@lumino/signaling'));
+        this._statusChanged = new signaling.Signal<this, KernelMessage.Status>(this);
         this._kernelChanged = new signaling.Signal<this, Session.ISessionConnection.IKernelChangedArgs>(this);
         this._ioPubMessage = new signaling.Signal<this, KernelMessage.IIOPubMessage>(this);
+        this._terminated = new signaling.Signal<this, void>(this);
         this._connectionStatusChanged = new signaling.Signal<this, Kernel.ConnectionStatus>(this);
         // Unique ID for this session instance
         this._id = uuid();
@@ -86,6 +103,7 @@ export class RawSession implements ISessionWithSocket {
             await this.kernelProcess.dispose().catch(noop);
         }
         this.isDisposed = true;
+        this.signaling.Signal.disconnectAll(this);
     }
 
     // Return the ID, this is session's ID, not clientID for messages
@@ -98,7 +116,7 @@ export class RawSession implements ISessionWithSocket {
         return this._kernel;
     }
 
-    get kernelSocketInformation(): KernelSocketInformation | undefined {
+    get kernelSocketInformation(): KernelSocketInformation {
         return {
             socket: this._kernel.socket,
             options: {
@@ -111,7 +129,7 @@ export class RawSession implements ISessionWithSocket {
     }
 
     // Provide status changes for the attached kernel
-    get statusChanged(): ISignal<this, Kernel.Status> {
+    get statusChanged(): ISignal<this, KernelMessage.Status> {
         return this._statusChanged;
     }
 
@@ -119,21 +137,23 @@ export class RawSession implements ISessionWithSocket {
     public async waitForReady(): Promise<void> {
         // When our kernel connects and gets a status message it triggers the ready promise
         const deferred = createDeferred<string>();
-        const handler = (_session: RawSession, status: Kernel.Status) => {
-            if (status == 'idle') {
+        const handler = (_session: RawSession, status: Kernel.ConnectionStatus) => {
+            if (status == 'connected') {
+                traceInfoIfCI('Raw session connected');
                 deferred.resolve(status);
             }
         };
-        this.statusChanged.connect(handler);
-        if (this.status == 'idle') {
-            deferred.resolve(this.status);
+        this.connectionStatusChanged.connect(handler);
+        if (this.connectionStatus === 'connected') {
+            traceInfoIfCI('Raw session connected');
+            deferred.resolve(this.connectionStatus);
         }
 
         const result = await Promise.race([deferred.promise, sleep(30_000)]);
-        this.statusChanged.disconnect(handler);
+        this.connectionStatusChanged.disconnect(handler);
 
-        if (result.toString() != 'idle') {
-            throw new TimedOutError(`Kernel with ${this.id} never connected.`);
+        if (result.toString() !== 'connected') {
+            throw new KernelConnectionTimeoutError(this.kernelConnectionMetadata);
         }
     }
 
@@ -144,7 +164,7 @@ export class RawSession implements ISessionWithSocket {
 
     // Not Implemented ISession
     get terminated(): ISignal<this, void> {
-        throw new Error('Not yet implemented');
+        return this._terminated;
     }
     get kernelChanged(): ISignal<this, Session.ISessionConnection.IKernelChangedArgs> {
         return this._kernelChanged;
@@ -165,13 +185,13 @@ export class RawSession implements ISessionWithSocket {
         throw new Error('Not yet implemented');
     }
     get name(): string {
-        throw new Error('Not yet implemented');
+        return this.kernel.name;
     }
     get type(): string {
-        throw new Error('Not yet implemented');
+        return 'notebook';
     }
     get serverSettings(): ServerConnection.ISettings {
-        throw new Error('Not yet implemented');
+        return this.kernel.serverSettings;
     }
     get model(): Session.IModel {
         return {
@@ -182,7 +202,7 @@ export class RawSession implements ISessionWithSocket {
             kernel: this._kernel.model
         };
     }
-    get status(): Kernel.Status {
+    get status(): KernelMessage.Status {
         return this.kernel.status;
     }
     public setPath(_path: string): Promise<void> {
@@ -200,10 +220,21 @@ export class RawSession implements ISessionWithSocket {
 
     // Private
     // Send out a message when our kernel changes state
-    private onKernelStatus(_sender: Kernel.IKernelConnection, state: Kernel.Status) {
+    private onKernelStatus(_sender: Kernel.IKernelConnection, state: KernelMessage.Status) {
+        traceInfoIfCI(`RawSession status changed to ${state}`);
         this._statusChanged.emit(state);
     }
     private onIOPubMessage(_sender: Kernel.IKernelConnection, msg: KernelMessage.IIOPubMessage) {
+        if (
+            !this.cellExecutedSuccessfully &&
+            msg.header.msg_type === 'execute_result' &&
+            msg.content &&
+            (this.jupyterLabServices.KernelMessage.isExecuteResultMsg(msg) ||
+                this.jupyterLabServices.KernelMessage.isExecuteInputMsg(msg)) &&
+            msg.content.execution_count
+        ) {
+            this.cellExecutedSuccessfully = true;
+        }
         this._ioPubMessage.emit(msg);
     }
     private onKernelConnectionStatus(_sender: Kernel.IKernelConnection, state: Kernel.ConnectionStatus) {

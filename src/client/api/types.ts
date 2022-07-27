@@ -4,7 +4,7 @@
 import { CancellationToken, Disposable, Event, Uri } from 'vscode';
 import * as lsp from 'vscode-languageserver-protocol';
 import { InterpreterUri } from '../common/installer/types';
-import { InstallerResponse, Product, ProductInstallStatus, Resource } from '../common/types';
+import { InstallerResponse, Product, Resource } from '../common/types';
 import { IInterpreterQuickPickItem } from '../interpreter/configuration/types';
 import { PythonEnvironment } from '../pythonEnvironments/info';
 export type ILanguageServerConnection = Pick<
@@ -40,7 +40,8 @@ export enum JupyterProductToInstall {
     notebook = 'notebook',
     kernelspec = 'kernelspec',
     nbconvert = 'nbconvert',
-    pandas = 'pandas'
+    pandas = 'pandas',
+    pip = 'pip'
 }
 
 /**
@@ -56,6 +57,7 @@ export type PythonApi = {
      * IInterpreterService
      */
     onDidChangeInterpreter: Event<void>;
+    onDidChangeInterpreters: Event<void>;
     /**
      * IInterpreterService
      */
@@ -89,16 +91,9 @@ export type PythonApi = {
         product: JupyterProductToInstall,
         resource?: InterpreterUri,
         cancel?: CancellationToken,
-        reInstallAndUpdate?: boolean
+        reInstallAndUpdate?: boolean,
+        installPipIfRequired?: boolean
     ): Promise<InstallerResponse>;
-    /**
-     * IInstaller
-     */
-    isProductVersionCompatible(
-        product: Product,
-        semVerRequirement: string,
-        resource?: PythonEnvironment
-    ): Promise<ProductInstallStatus>;
     /**
      * Retrieve interpreter path selected for Jupyter server from Python memento storage
      */
@@ -125,13 +120,9 @@ export interface IPythonInstaller {
         product: Product,
         resource?: InterpreterUri,
         cancel?: CancellationToken,
-        reInstallAndUpdate?: boolean
+        reInstallAndUpdate?: boolean,
+        installPipIfRequired?: boolean
     ): Promise<InstallerResponse>;
-    isProductVersionCompatible(
-        product: Product,
-        semVerRequirement: string,
-        resource?: PythonEnvironment
-    ): Promise<ProductInstallStatus>;
 }
 
 export const IPythonDebuggerPathProvider = Symbol('IPythonDebuggerPathProvider');

@@ -25,6 +25,7 @@ import { ErrorCategory, TelemetryErrorProperties } from '../common/errors/types'
 import { noop } from '../common/utils/misc';
 import { isPromise } from 'rxjs/internal-compatibility';
 import { DebuggingTelemetry } from '../debugger/constants';
+import { EnvironmentType } from '../pythonEnvironments/info';
 
 export const waitBeforeSending = 'waitBeforeSending';
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -557,6 +558,21 @@ export interface IEventNamePropertyMapping {
         hasWidget: boolean;
         hasJupyter: boolean;
         hasVnd: boolean;
+    };
+
+    /**
+     * Used to capture time taken to get enviornment variables for a python environment.
+     * Also lets us know whether it worked or not.
+     */
+    [Telemetry.GetActivatedEnvironmentVariables]: {
+        /**
+         * Type of the Python environment.
+         */
+        envType?: EnvironmentType;
+        /**
+         * Whether the env variables were fetched successfully or not.
+         */
+        failed: boolean;
     };
     [EventName.HASHED_PACKAGE_PERF]: never | undefined;
     /**
@@ -1199,6 +1215,22 @@ export interface IEventNamePropertyMapping {
 
     // Telemetry send when we create a notebook for a raw kernel or jupyter
     [Telemetry.RawKernelCreatingNotebook]: never | undefined;
+    /**
+     * After starting a kernel we send a request to get the kernel info.
+     * This tracks the total time taken to get the response back (or wether we timedout).
+     * If we timeout and later we find successful comms for this session, then timeout is too low
+     * or we need more attempts.
+     */
+    [Telemetry.RawKernelInfoResonse]: {
+        /**
+         * Total number of attempts and sending a request and waiting for response.
+         */
+        attempts: number;
+        /**
+         * Whether we timedout while waiting for response for Kernel info request.
+         */
+        timedout: boolean;
+    };
     [Telemetry.JupyterCreatingNotebook]: never | undefined | TelemetryErrorProperties;
     // Telemetry sent when starting auto starting Native Notebook kernel fails silently.
     [Telemetry.KernelStartFailedAndUIDisabled]: never | undefined;
@@ -1298,6 +1330,13 @@ export interface IEventNamePropertyMapping {
         kernelSpecCount: number; // Total number of kernel specs in the kernel list.
         kernelInterpreterCount: number; // Total number of interpreters in the kernel list.
         kernelLiveCount: number; // Total number of live kernels in the kernel list.
+        /**
+         * Total number of conda environments that share the same interpreter
+         * This happens when we create conda envs without the `python` argument.
+         * Such conda envs don't work today in the extension.
+         * Hence users with such environments could hvae issues with starting kernels or packages not getting loaded correctly or at all.
+         */
+        condaEnvsSharingSameInterpreter: number;
     } & ResourceSpecificTelemetryProperties;
 
     // Native notebooks events
@@ -1415,14 +1454,6 @@ export interface IEventNamePropertyMapping {
          * `doNotShowAgain` - If prompt was displayed & doNotShowAgain clicked by the user
          */
         action: 'displayed' | 'dismissed' | 'ok' | 'cancel' | 'doNotShowAgain';
-    };
-    [Telemetry.KernelSpecNotFoundError]: {
-        resourceType: 'notebook' | 'interactive'; // Whether its a notebook or interactive window.
-        language: string; // Language defined in notebook metadata.
-        kernelConnectionProvided: boolean; // Whether kernelConnection was provided.
-        notebookMetadataProvided: boolean; // Whether notebook metadata was provided.
-        hasKernelSpecInMetadata: boolean; // Whether we have kernelspec info in the notebook metadata.
-        kernelConnectionFound: boolean; // Whether a kernel connection was found or not.
     };
     [DebuggingTelemetry.clickedOnSetup]: never | undefined;
     [DebuggingTelemetry.closedModal]: never | undefined;

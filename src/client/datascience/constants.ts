@@ -4,7 +4,6 @@
 
 import * as path from 'path';
 import { EXTENSION_ROOT_DIR, JVSC_EXTENSION_ID } from '../common/constants';
-import { IS_WINDOWS } from '../common/platform/constants';
 
 export const DefaultTheme = 'Default Light+';
 // Identifier for the output panel that will display the output from the Jupyter Server.
@@ -189,7 +188,6 @@ export namespace EditorContexts {
     export const IsPythonOrNativeActive = 'jupyter.ispythonornativeactive';
     export const IsPythonOrInteractiveActive = 'jupyter.ispythonorinteractiveeactive';
     export const IsPythonOrInteractiveOrNativeActive = 'jupyter.ispythonorinteractiveornativeeactive';
-    export const HaveCellSelected = 'jupyter.havecellselected';
     export const CanRestartNotebookKernel = 'jupyter.notebookeditor.canrestartNotebookkernel';
     export const CanInterruptNotebookKernel = 'jupyter.notebookeditor.canInterruptNotebookKernel';
     export const CanRestartInteractiveWindowKernel = 'jupyter.interactive.canRestartNotebookKernel';
@@ -197,6 +195,7 @@ export namespace EditorContexts {
     export const DebuggingInProgress = 'jupyter.notebookeditor.debuggingInProgress';
     export const RunByLineInProgress = 'jupyter.notebookeditor.runByLineInProgress';
     export const IsPythonNotebook = 'jupyter.ispythonnotebook';
+    export const IsJupyterKernelSelected = 'jupyter.kernel.isjupyter';
     export const IsDataViewerActive = 'jupyter.dataViewerActive';
     export const HasNativeNotebookOrInteractiveWindowOpen = 'jupyter.hasNativeNotebookOrInteractiveWindowOpen';
     export const ZmqAvailable = 'jupyter.zmqavailable';
@@ -205,9 +204,6 @@ export namespace EditorContexts {
 export namespace RegExpValues {
     export const PythonCellMarker = /^(#\s*%%|#\s*\<codecell\>|#\s*In\[\d*?\]|#\s*In\[ \])/;
     export const PythonMarkdownCellMarker = /^(#\s*%%\s*\[markdown\]|#\s*\<markdowncell\>)/;
-    export const CheckJupyterRegEx = IS_WINDOWS ? /^jupyter?\.exe$/ : /^jupyter?$/;
-    export const PyKernelOutputRegEx = /.*\s+(.+)$/m;
-    export const KernelSpecOutputRegEx = /^\s*(\S+)\s+(\S+)$/;
     // This next one has to be a string because uglifyJS isn't handling the groups. We use named-js-regexp to parse it
     // instead.
     export const UrlPatternRegEx =
@@ -219,15 +215,10 @@ export namespace RegExpValues {
         IP: string | undefined;
     }
     export const HttpPattern = /https?:\/\//;
-    export const ExtractPortRegex = /https?:\/\/[^\s]+:(\d+)[^\s]+/;
-    export const ConvertToRemoteUri = /(https?:\/\/)([^\s])+(:\d+[^\s]*)/;
-    export const ParamsExractorRegEx = /\S+\((.*)\)\s*{/;
-    export const ArgsSplitterRegEx = /([^\s,]+)/;
     export const ShapeSplitterRegEx = /.*,\s*(\d+).*/;
     export const SvgHeightRegex = /(\<svg.*height=\")(.*?)\"/;
     export const SvgWidthRegex = /(\<svg.*width=\")(.*?)\"/;
     export const SvgSizeTagRegex = /\<svg.*tag=\"sizeTag=\{(.*),\s*(.*)\}\"/;
-    export const StyleTagRegex = /\<style[\s\S]*\<\/style\>/m;
 }
 
 export enum Telemetry {
@@ -366,6 +357,7 @@ export enum Telemetry {
     ExecuteCellPerceivedWarm = 'DS_INTERNAL.EXECUTE_CELL_PERCEIVED_WARM',
     PerceivedJupyterStartupNotebook = 'DS_INTERNAL.PERCEIVED_JUPYTER_STARTUP_NOTEBOOK',
     StartExecuteNotebookCellPerceivedCold = 'DS_INTERNAL.START_EXECUTE_NOTEBOOK_CELL_PERCEIVED_COLD',
+    GetActivatedEnvironmentVariables = 'DS_INTERNAL.GET_ACTIVATED_ENV_VARIABLES',
     WebviewStartup = 'DS_INTERNAL.WEBVIEW_STARTUP',
     VariableExplorerFetchTime = 'DS_INTERNAL.VARIABLE_EXPLORER_FETCH_TIME',
     WebviewStyleUpdate = 'DS_INTERNAL.WEBVIEW_STYLE_UPDATE',
@@ -452,6 +444,7 @@ export enum Telemetry {
     KernelStartFailedAndUIDisabled = 'DS_INTERNAL.START_RAW_FAILED_UI_DISABLED',
     RawKernelSessionConnect = 'DS_INTERNAL.RAWKERNEL_SESSION_CONNECT',
     RawKernelStartRawSession = 'DS_INTERNAL.RAWKERNEL_START_RAW_SESSION',
+    RawKernelInfoResonse = 'DS_INTERNAL.RAWKERNEL_INFO_RESPONSE',
     RawKernelSessionStartSuccess = 'DS_INTERNAL.RAWKERNEL_SESSION_START_SUCCESS',
     RawKernelSessionStart = 'DS_INTERNAL.RAWKERNEL_SESSION_START',
     RawKernelSessionStartUserCancel = 'DS_INTERNAL.RAWKERNEL_SESSION_START_USER_CANCEL',
@@ -477,7 +470,6 @@ export enum Telemetry {
     NotebookRestart = 'DATASCIENCE.NOTEBOOK_RESTART',
     SwitchKernel = 'DS_INTERNAL.SWITCH_KERNEL',
     KernelCount = 'DS_INTERNAL.KERNEL_COUNT',
-    KernelSpecNotFoundError = 'DATASCIENCE.KERNEL_SPEC_NOT_FOUND_ERROR',
     ExecuteCell = 'DATASCIENCE.EXECUTE_CELL',
     PythonKerneExecutableMatches = 'DS_INTERNAL.PYTHON_KERNEL_EXECUTABLE_MATCHES',
     /**
@@ -575,10 +567,6 @@ export namespace Settings {
     export const JupyterServerUriListMax = 10;
     // If this timeout expires, ignore the completion request sent to Jupyter.
     export const IntellisenseTimeout = 500;
-    // If this timeout expires, ignore the completions requests. (don't wait for it to complete).
-    export const MaxIntellisenseTimeout = 30_000;
-    export const RemoteDebuggerPortBegin = 8889;
-    export const RemoteDebuggerPortEnd = 9000;
 }
 
 export namespace DataFrameLoading {
@@ -614,15 +602,10 @@ export namespace GetVariableInfo {
 }
 
 export namespace Identifiers {
-    export const EmptyFileName = '2DB9B899-6519-4E1B-88B0-FA728A274115';
     export const GeneratedThemeName = 'ipython-theme'; // This needs to be all lower class and a valid class name.
     export const HistoryPurpose = 'history';
     export const RawPurpose = 'raw';
-    export const PingPurpose = 'ping';
     export const MatplotLibDefaultParams = '_VSCode_defaultMatplotlib_Params';
-    export const EditCellId = '3D3AB152-ADC1-4501-B813-4B83B49B0C10';
-    export const SvgSizeTag = 'sizeTag={{0}, {1}}';
-    export const InteractiveWindowIdentityScheme = 'history';
     export const DefaultCodeCellMarker = '# %%';
     export const DefaultCommTarget = 'jupyter.widget';
     export const ALL_VARIABLES = 'ALL_VARIABLES';

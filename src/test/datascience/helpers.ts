@@ -2,10 +2,19 @@
 // Licensed under the MIT License.
 
 'use strict';
+import { assert } from 'chai';
 import { noop } from 'lodash';
-import { Uri, window, workspace } from 'vscode';
+import * as vscode from 'vscode';
 import { traceInfo } from '../../client/common/logger';
 import { IJupyterSettings } from '../../client/common/types';
+import { InteractiveWindow } from '../../client/datascience/interactive-window/interactiveWindow';
+import { InteractiveWindowProvider } from '../../client/datascience/interactive-window/interactiveWindowProvider';
+import { IInteractiveWindowProvider } from '../../client/datascience/types';
+import {
+    createTemporaryFile,
+    waitForCellExecutionToComplete,
+    waitForExecutionCompletedSuccessfully
+} from './notebook/helper';
 
 // The default base set of data science settings to use
 export function defaultDataScienceSettings(): IJupyterSettings {
@@ -72,8 +81,59 @@ export function writeDiffSnapshot(_snapshot: any, _prefix: string) {
 
 export async function openNotebook(ipynbFile: string) {
     traceInfo(`Opening notebook ${ipynbFile}`);
-    const uri = Uri.file(ipynbFile);
-    const nb = await workspace.openNotebookDocument(uri);
-    await window.showNotebookDocument(nb);
+    const uri = vscode.Uri.file(ipynbFile);
+    const nb = await vscode.workspace.openNotebookDocument(uri);
+    await vscode.window.showNotebookDocument(nb);
     traceInfo(`Opened notebook ${ipynbFile}`);
+}
+
+export async function createStandaloneInteractiveWindow(interactiveWindowProvider: InteractiveWindowProvider) {
+    const activeInteractiveWindow = (await interactiveWindowProvider.getOrCreate(undefined)) as InteractiveWindow;
+    return activeInteractiveWindow;
+}
+
+export async function insertIntoInputEditor(source: string) {
+    // Add code to the input box
+    await vscode.window.activeTextEditor?.edit((editBuilder) => {
+        editBuilder.insert(new vscode.Position(0, 0), source);
+    });
+    return vscode.window.activeTextEditor;
+}
+
+export async function submitFromPythonFile(
+    interactiveWindowProvider: IInteractiveWindowProvider,
+    source: string,
+    disposables: vscode.Disposable[]
+) {
+    const tempFile = await createTemporaryFile({ contents: source, extension: '.py' });
+    disposables.push(tempFile);
+    const untitledPythonFile = await vscode.workspace.openTextDocument(tempFile.file);
+    await vscode.window.showTextDocument(untitledPythonFile);
+    const activeInteractiveWindow = (await interactiveWindowProvider.getOrCreate(
+        untitledPythonFile.uri
+    )) as InteractiveWindow;
+    await activeInteractiveWindow.addCode(source, untitledPythonFile.uri, 0);
+    return { activeInteractiveWindow, untitledPythonFile };
+}
+
+export async function waitForLastCellToComplete(interactiveWindow: InteractiveWindow, errorsOkay?: boolean) {
+    const notebookDocument = vscode.workspace.notebookDocuments.find(
+        (doc) => doc.uri.toString() === interactiveWindow?.notebookUri?.toString()
+    );
+    const cells = notebookDocument?.getCells();
+    assert.ok(notebookDocument !== undefined, 'Interactive window notebook document not found');
+    let codeCell: vscode.NotebookCell | undefined;
+    for (let i = cells!.length - 1; i >= 0; i -= 1) {
+        if (cells![i].kind === vscode.NotebookCellKind.Code) {
+            codeCell = cells![i];
+            break;
+        }
+    }
+    assert.ok(codeCell !== undefined, 'No code cell found in interactive window notebook document');
+    if (errorsOkay) {
+        await waitForCellExecutionToComplete(codeCell!);
+    } else {
+        await waitForExecutionCompletedSuccessfully(codeCell!);
+    }
+    return codeCell!;
 }

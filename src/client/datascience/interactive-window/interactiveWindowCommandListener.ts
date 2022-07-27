@@ -23,7 +23,6 @@ import {
     IDocumentManager,
     IVSCodeNotebook
 } from '../../common/application/types';
-import { CancellationError } from '../../common/cancellation';
 import { JVSC_EXTENSION_ID, PYTHON_LANGUAGE } from '../../common/constants';
 import { traceError, traceInfo } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
@@ -33,8 +32,8 @@ import { captureTelemetry } from '../../telemetry';
 import { CommandSource } from '../../testing/common/constants';
 import { generateCellsFromDocument } from '../cellFactory';
 import { Commands, Telemetry } from '../constants';
-import { ExportFormat, IExportDialog, IExportManager } from '../export/types';
-import { JupyterInstallError } from '../jupyter/jupyterInstallError';
+import { ExportFormat, IExportDialog, IFileConverter } from '../export/types';
+import { JupyterInstallError } from '../errors/jupyterInstallError';
 import {
     IDataScienceCommandListener,
     IDataScienceErrorHandler,
@@ -63,7 +62,7 @@ export class NativeInteractiveWindowCommandListener implements IDataScienceComma
         @inject(IStatusProvider) private statusProvider: IStatusProvider,
         @inject(IDataScienceErrorHandler) private dataScienceErrorHandler: IDataScienceErrorHandler,
         @inject(INotebookEditorProvider) protected ipynbProvider: INotebookEditorProvider,
-        @inject(IExportManager) private exportManager: IExportManager,
+        @inject(IFileConverter) private fileConverter: IFileConverter,
         @inject(IExportDialog) private exportDialog: IExportDialog,
         @inject(IClipboard) private clipboard: IClipboard,
         @inject(IVSCodeNotebook) private notebook: IVSCodeNotebook,
@@ -193,21 +192,8 @@ export class NativeInteractiveWindowCommandListener implements IDataScienceComma
             result = await promise();
             return result;
         } catch (err) {
-            if (!(err instanceof Error)) {
-                traceError('listenForErrors', err as any);
-                void this.applicationShell.showErrorMessage(err as any);
-                return;
-            } else if (!(err instanceof CancellationError)) {
-                if (err.message) {
-                    traceError(err.message);
-                    void this.applicationShell.showErrorMessage(err.message);
-                } else {
-                    traceError(err.toString());
-                    void this.applicationShell.showErrorMessage(err.toString());
-                }
-            } else {
-                traceInfo('Canceled');
-            }
+            traceError('listenForErrors', err as any);
+            void this.dataScienceErrorHandler.handleError(err);
         }
         return result;
     }
@@ -305,7 +291,8 @@ export class NativeInteractiveWindowCommandListener implements IDataScienceComma
                         viewColumn: ViewColumn.Beside
                     });
                     const preferredController = await this.controllerManager.getActiveInterpreterOrDefaultController(
-                        JupyterNotebookView
+                        JupyterNotebookView,
+                        file
                     );
                     if (preferredController) {
                         await this.commandManager.executeCommand('notebook.selectKernel', {
@@ -346,7 +333,7 @@ export class NativeInteractiveWindowCommandListener implements IDataScienceComma
     private exportCells() {
         const interactiveWindow = this.interactiveWindowProvider.activeWindow;
         if (interactiveWindow) {
-            interactiveWindow.exportCells();
+            interactiveWindow.export();
         }
     }
 
@@ -394,8 +381,7 @@ export class NativeInteractiveWindowCommandListener implements IDataScienceComma
             // Don't call the other overload as we'll end up with double telemetry.
             await this.waitForStatus(
                 async () => {
-                    const contents = await this.fileSystem.readFile(uris[0]);
-                    await this.exportManager.export(ExportFormat.python, contents, uris[0]);
+                    await this.fileConverter.importIpynb(uris[0]);
                 },
                 localize.DataScience.importingFormat(),
                 uris[0].fsPath
@@ -408,8 +394,7 @@ export class NativeInteractiveWindowCommandListener implements IDataScienceComma
         if (file.fsPath && file.fsPath.length > 0) {
             await this.waitForStatus(
                 async () => {
-                    const contents = await this.fileSystem.readFile(file);
-                    await this.exportManager.export(ExportFormat.python, contents, file);
+                    await this.fileConverter.importIpynb(file);
                 },
                 localize.DataScience.importingFormat(),
                 file.fsPath

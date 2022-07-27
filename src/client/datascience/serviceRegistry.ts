@@ -34,17 +34,17 @@ import { DataScienceCodeLensProvider } from './editor-integration/codelensprovid
 import { CodeWatcher } from './editor-integration/codewatcher';
 import { Decorator } from './editor-integration/decorator';
 import { HoverProvider } from './editor-integration/hoverProvider';
-import { DataScienceErrorHandler } from './errorHandler/errorHandler';
+import { DataScienceErrorHandler } from './errors/errorHandler';
 import { ExportBase } from './export/exportBase';
 import { ExportDialog } from './export/exportDialog';
 import { ExportFileOpener } from './export/exportFileOpener';
 import { ExportInterpreterFinder } from './export/exportInterpreterFinder';
-import { ExportManager } from './export/exportManager';
+import { FileConverter } from './export/fileConverter';
 import { ExportToHTML } from './export/exportToHTML';
 import { ExportToPDF } from './export/exportToPDF';
 import { ExportToPython } from './export/exportToPython';
 import { ExportUtil } from './export/exportUtil';
-import { ExportFormat, IExport, IExportDialog, IExportManager } from './export/types';
+import { ExportFormat, INbConvertExport, IExportDialog, IFileConverter, IExport } from './export/types';
 import { NotebookProvider } from './interactive-common/notebookProvider';
 import { NotebookServerProvider } from './interactive-common/notebookServerProvider';
 import { NotebookUsageTracker } from './interactive-common/notebookUsageTracker';
@@ -64,7 +64,7 @@ import { JupyterInterpreterSubCommandExecutionService } from './jupyter/interpre
 import { NbConvertExportToPythonService } from './jupyter/interpreter/nbconvertExportToPythonService';
 import { NbConvertInterpreterDependencyChecker } from './jupyter/interpreter/nbconvertInterpreterDependencyChecker';
 import { CellOutputMimeTypeTracker } from './jupyter/jupyterCellOutputMimeTypeTracker';
-import { JupyterDebugger } from './jupyter/jupyterDebugger';
+import { InteractiveWindowDebugger } from './jupyter/interactiveWindowDebugger';
 import { JupyterExporter } from './jupyter/jupyterExporter';
 import { JupyterImporter } from './jupyter/jupyterImporter';
 import { JupyterNotebookProvider } from './jupyter/jupyterNotebookProvider';
@@ -73,7 +73,6 @@ import { JupyterSessionManagerFactory } from './jupyter/jupyterSessionManagerFac
 import { JupyterVariables } from './jupyter/jupyterVariables';
 import { isLocalLaunch } from './jupyter/kernels/helpers';
 import { KernelDependencyService } from './jupyter/kernels/kernelDependencyService';
-import { KernelSelector } from './jupyter/kernels/kernelSelector';
 import { JupyterKernelService } from './jupyter/kernels/jupyterKernelService';
 import { KernelVariables } from './jupyter/kernelVariables';
 import { NotebookStarter } from './jupyter/notebookStarter';
@@ -112,7 +111,7 @@ import {
     IDebugLocationTracker,
     IInteractiveWindowProvider,
     IJupyterCommandFactory,
-    IJupyterDebugger,
+    IInteractiveWindowDebugger,
     IJupyterDebugService,
     IJupyterExecution,
     IJupyterInterpreterDependencyManager,
@@ -164,6 +163,7 @@ import { HostJupyterServer } from './jupyter/liveshare/hostJupyterServer';
 import { HostRawNotebookProvider } from './raw-kernel/liveshare/hostRawNotebookProvider';
 import { KernelCommandListener } from './jupyter/kernels/kernelCommandListener';
 import { CellHashProviderFactory } from './editor-integration/cellHashProviderFactory';
+import { ExportToPythonPlain } from './export/exportToPythonPlain';
 
 // README: Did you make sure "dataScienceIocContainer.ts" has also been updated appropriately?
 
@@ -235,7 +235,7 @@ export function registerTypes(serviceManager: IServiceManager, inNotebookApiExpe
     serviceManager.addSingleton<IInteractiveWindowProvider>(IInteractiveWindowProvider, InteractiveWindowProvider);
     serviceManager.addSingleton<IDataScienceCommandListener>(IDataScienceCommandListener, NativeInteractiveWindowCommandListener);
     serviceManager.addSingleton<IDataScienceCommandListener>(IDataScienceCommandListener, KernelCommandListener);
-    serviceManager.addSingleton<IJupyterDebugger>(IJupyterDebugger, JupyterDebugger, undefined, [ICellHashListener]);
+    serviceManager.addSingleton<IInteractiveWindowDebugger>(IInteractiveWindowDebugger, InteractiveWindowDebugger, undefined, [ICellHashListener]);
     serviceManager.addSingleton<IJupyterExecution>(IJupyterExecution, HostJupyterExecution);
     serviceManager.addSingleton<IJupyterPasswordConnect>(IJupyterPasswordConnect, JupyterPasswordConnect);
     serviceManager.addSingleton<IJupyterSessionManagerFactory>(IJupyterSessionManagerFactory, JupyterSessionManagerFactory);
@@ -258,7 +258,6 @@ export function registerTypes(serviceManager: IServiceManager, inNotebookApiExpe
     serviceManager.addSingleton<JupyterInterpreterStateStore>(JupyterInterpreterStateStore, JupyterInterpreterStateStore);
     serviceManager.addSingleton<JupyterServerSelector>(JupyterServerSelector, JupyterServerSelector);
     serviceManager.addSingleton<JupyterServerSelectorCommand>(JupyterServerSelectorCommand, JupyterServerSelectorCommand);
-    serviceManager.addSingleton<KernelSelector>(KernelSelector, KernelSelector);
     serviceManager.addSingleton<JupyterKernelService>(JupyterKernelService, JupyterKernelService);
     serviceManager.addSingleton<NotebookCommands>(NotebookCommands, NotebookCommands);
     serviceManager.addSingleton<NotebookStarter>(NotebookStarter, NotebookStarter);
@@ -277,13 +276,14 @@ export function registerTypes(serviceManager: IServiceManager, inNotebookApiExpe
     serviceManager.addSingleton<IJupyterDebugService>(IJupyterDebugService, JupyterDebugService, Identifiers.RUN_BY_LINE_DEBUGSERVICE);
     serviceManager.add<IJupyterVariableDataProvider>(IJupyterVariableDataProvider, JupyterVariableDataProvider);
     serviceManager.addSingleton<IJupyterVariableDataProviderFactory>(IJupyterVariableDataProviderFactory, JupyterVariableDataProviderFactory);
-    serviceManager.addSingleton<IExportManager>(IExportManager, ExportManager);
+    serviceManager.addSingleton<IFileConverter>(IFileConverter, FileConverter);
     serviceManager.addSingleton<ExportInterpreterFinder>(ExportInterpreterFinder, ExportInterpreterFinder);
     serviceManager.addSingleton<ExportFileOpener>(ExportFileOpener, ExportFileOpener);
-    serviceManager.addSingleton<IExport>(IExport, ExportToPDF, ExportFormat.pdf);
-    serviceManager.addSingleton<IExport>(IExport, ExportToHTML, ExportFormat.html);
-    serviceManager.addSingleton<IExport>(IExport, ExportToPython, ExportFormat.python);
-    serviceManager.addSingleton<IExport>(IExport, ExportBase, 'Export Base');
+    serviceManager.addSingleton<INbConvertExport>(INbConvertExport, ExportToPDF, ExportFormat.pdf);
+    serviceManager.addSingleton<INbConvertExport>(INbConvertExport, ExportToHTML, ExportFormat.html);
+    serviceManager.addSingleton<INbConvertExport>(INbConvertExport, ExportToPython, ExportFormat.python);
+    serviceManager.addSingleton<INbConvertExport>(INbConvertExport, ExportBase, 'Export Base');
+    serviceManager.addSingleton<IExport>(IExport, ExportToPythonPlain, ExportFormat.python);
     serviceManager.addSingleton<ExportUtil>(ExportUtil, ExportUtil);
     serviceManager.addSingleton<ExportCommands>(ExportCommands, ExportCommands);
     serviceManager.addSingleton<IExportDialog>(IExportDialog, ExportDialog);

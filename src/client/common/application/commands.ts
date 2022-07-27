@@ -78,6 +78,7 @@ interface ICommandNameWithoutArgumentTypeMapping {
  */
 export interface ICommandNameArgumentTypeMapping extends ICommandNameWithoutArgumentTypeMapping {
     ['vscode.openWith']: [Uri, string];
+    ['jupyter.filterKernels']: [never];
     ['workbench.action.quickOpen']: [string];
     ['workbench.extensions.installExtension']: [Uri | 'ms-toolsai.jupyter'];
     ['workbench.action.files.openFolder']: [];
@@ -117,6 +118,7 @@ export interface ICommandNameArgumentTypeMapping extends ICommandNameWithoutArgu
     ];
     ['interactive.execute']: [string];
     ['outline.focus']: [];
+    ['vscode.executeCompletionItemProvider']: [Uri, Position];
     [DSCommands.NotebookEditorInterruptKernel]: [{ notebookEditor: { notebookUri: Uri } } | undefined | Uri];
     [DSCommands.ExportFileAndOutputAsNotebook]: [Uri];
     [DSCommands.RunAllCells]: [Uri];
@@ -135,9 +137,9 @@ export interface ICommandNameArgumentTypeMapping extends ICommandNameWithoutArgu
     [DSCommands.RunFileInInteractiveWindows]: [Uri];
     [DSCommands.DebugFileInInteractiveWindows]: [Uri];
     [DSCommands.DebugCell]: [Uri, number, number, number, number];
-    [DSCommands.DebugStepOver]: [];
-    [DSCommands.DebugStop]: [];
-    [DSCommands.DebugContinue]: [];
+    [DSCommands.DebugStepOver]: [Uri];
+    [DSCommands.DebugStop]: [Uri];
+    [DSCommands.DebugContinue]: [Uri];
     [DSCommands.RunCurrentCellAndAddBelow]: [Uri];
     [DSCommands.InsertCellBelowPosition]: [];
     [DSCommands.InsertCellBelow]: [];
@@ -155,10 +157,10 @@ export interface ICommandNameArgumentTypeMapping extends ICommandNameWithoutArgu
     [DSCommands.GotoPrevCellInFile]: [];
     [DSCommands.ScrollToCell]: [Uri, string];
     [DSCommands.ViewJupyterOutput]: [];
-    [DSCommands.ExportAsPythonScript]: [string | undefined, Uri | undefined, PythonEnvironment | undefined];
-    [DSCommands.ExportToHTML]: [string | undefined, Uri | undefined, string | undefined, PythonEnvironment | undefined];
-    [DSCommands.ExportToPDF]: [string | undefined, Uri | undefined, string | undefined, PythonEnvironment | undefined];
-    [DSCommands.Export]: [string | undefined, Uri | undefined, string | undefined, PythonEnvironment | undefined];
+    [DSCommands.ExportAsPythonScript]: [NotebookDocument | undefined, PythonEnvironment | undefined];
+    [DSCommands.ExportToHTML]: [NotebookDocument | undefined, string | undefined, PythonEnvironment | undefined];
+    [DSCommands.ExportToPDF]: [NotebookDocument | undefined, string | undefined, PythonEnvironment | undefined];
+    [DSCommands.Export]: [NotebookDocument | undefined, string | undefined, PythonEnvironment | undefined];
     [DSCommands.NativeNotebookExport]: [Uri | undefined | { notebookEditor: { notebookUri: Uri } }];
     [DSCommands.SelectJupyterCommandLine]: [undefined | Uri];
     [DSCommands.LatestExtension]: [string];

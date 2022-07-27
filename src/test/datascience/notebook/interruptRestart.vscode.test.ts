@@ -349,23 +349,14 @@ suite('DataScience - VSCode Notebook - Restart/Interrupt/Cancel/Errors (slow)', 
             waitForTextOutput(cell1, '1', 0, false)
         ]);
         assert.strictEqual(cell1.executionSummary?.executionOrder, 1, 'Cell 1 should have an execution order of 1');
+        assert.strictEqual(cell2.executionSummary?.executionOrder, 2, 'Cell 1 should have an execution order of 2');
 
         // Clear all outputs
         await commands.executeCommand('notebook.clearAllCellsOutputs');
         await waitForOutputs(cell1, 0);
 
-        // Wait a bit to make sure it cleared
+        // Wait a bit to make sure it cleared & for kernel to die.
         await sleep(500);
-
-        // Try to run cell 1 again, it should fail with errors.
-        await Promise.all([
-            runCell(cell1),
-            waitForCondition(async () => cell1.executionSummary?.success === false, 10_000, 'Cell 1 did not fail')
-        ]);
-        assert.isUndefined(
-            cell1.executionSummary?.executionOrder,
-            'Execution order should be undefined as the cell did not run'
-        );
 
         // Restart the kernel & use event handler to check if it was restarted successfully.
         const kernel = api.serviceContainer.get<IKernelProvider>(IKernelProvider).get(cell1.notebook);
@@ -382,11 +373,15 @@ suite('DataScience - VSCode Notebook - Restart/Interrupt/Cancel/Errors (slow)', 
         traceInfo('Step 10 Restarted');
 
         // Run the first cell again & this time it should work.
+        // When we re-run the cells, the execution order shouldl start from 1 all over again
+        // If its one, then kernel has restarted.
         await Promise.all([
-            runCell(cell1),
+            runAllCellsInActiveNotebook(),
             waitForExecutionCompletedSuccessfully(cell1),
+            waitForExecutionCompletedSuccessfully(cell2),
             waitForTextOutput(cell1, '1', 0, false)
         ]);
         assert.strictEqual(cell1.executionSummary?.executionOrder, 1, 'Cell 1 should have an execution order of 1');
+        assert.strictEqual(cell2.executionSummary?.executionOrder, 2, 'Cell 1 should have an execution order of 2');
     });
 });

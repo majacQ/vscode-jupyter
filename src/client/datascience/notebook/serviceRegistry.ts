@@ -13,16 +13,18 @@ import { NotebookCreator } from './creation/notebookCreator';
 import { NotebookCellLanguageService } from './cellLanguageService';
 import { EmptyNotebookCellLanguageService } from './emptyNotebookCellLanguageService';
 import { NotebookIntegration } from './integration';
-import { NotebookCompletionProvider } from './intellisense/completionProvider';
-import { IntroduceNativeNotebookStartPage } from './introStartPage';
+import { PythonKernelCompletionProvider } from './intellisense/pythonKernelCompletionProvider';
 import { NotebookControllerManager } from './notebookControllerManager';
 import { NotebookDisposeService } from './notebookDisposeService';
 import { RemoteSwitcher } from './remoteSwitcher';
-import { INotebookControllerManager } from './types';
+import { INotebookControllerManager, INotebookLanguageClientProvider } from './types';
 import { RendererCommunication } from './outputs/rendererCommunication';
 import { PlotSaveHandler } from './outputs/plotSaveHandler';
 import { PlotViewHandler } from './outputs/plotViewHandler';
 import { CellOutputDisplayIdTracker } from '../jupyter/kernels/cellDisplayIdTracker';
+import { IntellisenseProvider } from './intellisense/intellisenseProvider';
+import { KernelFilterUI } from './kernelFilter/kernelFilterUI';
+import { KernelFilterService } from './kernelFilter/kernelFilterService';
 
 export function registerTypes(serviceManager: IServiceManager) {
     serviceManager.addSingleton<IExtensionSingleActivationService>(
@@ -34,10 +36,6 @@ export function registerTypes(serviceManager: IServiceManager) {
         NotebookDisposeService
     );
     serviceManager.addSingleton<IExtensionSingleActivationService>(IExtensionSingleActivationService, RemoteSwitcher);
-    serviceManager.addSingleton<IExtensionSingleActivationService>(
-        IExtensionSingleActivationService,
-        IntroduceNativeNotebookStartPage
-    );
     serviceManager.addSingleton<IExtensionSingleActivationService>(
         IExtensionSingleActivationService,
         EmptyNotebookCellLanguageService
@@ -54,7 +52,12 @@ export function registerTypes(serviceManager: IServiceManager) {
         NotebookCellLanguageService
     );
     serviceManager.addSingleton<NotebookCellLanguageService>(NotebookCellLanguageService, NotebookCellLanguageService);
-    serviceManager.addSingleton<NotebookCompletionProvider>(NotebookCompletionProvider, NotebookCompletionProvider);
+    serviceManager.addSingleton<PythonKernelCompletionProvider>(
+        PythonKernelCompletionProvider,
+        PythonKernelCompletionProvider
+    );
+    serviceManager.addSingleton<INotebookLanguageClientProvider>(INotebookLanguageClientProvider, IntellisenseProvider);
+    serviceManager.addBinding(INotebookLanguageClientProvider, IExtensionSingleActivationService);
     serviceManager.addSingleton<CreationOptionService>(CreationOptionService, CreationOptionService);
     serviceManager.addSingleton<NotebookCreator>(NotebookCreator, NotebookCreator);
     serviceManager.addSingleton<INotebookControllerManager>(INotebookControllerManager, NotebookControllerManager);
@@ -64,5 +67,8 @@ export function registerTypes(serviceManager: IServiceManager) {
         IExtensionSyncActivationService,
         RendererCommunication
     );
+    serviceManager.addSingleton<IExtensionSyncActivationService>(IExtensionSyncActivationService, KernelFilterUI);
     serviceManager.addBinding(INotebookControllerManager, IExtensionSyncActivationService);
+
+    serviceManager.addSingleton<KernelFilterService>(KernelFilterService, KernelFilterService);
 }

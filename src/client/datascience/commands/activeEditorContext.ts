@@ -2,21 +2,20 @@
 // Licensed under the MIT License.
 
 'use strict';
-
 import { inject, injectable } from 'inversify';
 import { NotebookEditor, TextEditor } from 'vscode';
-import { ServerStatus } from '../../../datascience-ui/interactive-common/mainState';
 import { IExtensionSingleActivationService } from '../../activation/types';
 import { ICommandManager, IDocumentManager, IVSCodeNotebook } from '../../common/application/types';
 import { PYTHON_LANGUAGE } from '../../common/constants';
 import { ContextKey } from '../../common/contextKey';
 import { IDisposable, IDisposableRegistry } from '../../common/types';
-import { isNotebookCell } from '../../common/utils/misc';
+import { isNotebookCell, noop } from '../../common/utils/misc';
 import { EditorContexts } from '../constants';
 import { getActiveInteractiveWindow } from '../interactive-window/helpers';
 import { IKernel, IKernelProvider } from '../jupyter/kernels/types';
 import { InteractiveWindowView, JupyterNotebookView } from '../notebook/constants';
-import { getNotebookMetadata, isPythonNotebook } from '../notebook/helpers/helpers';
+import { getNotebookMetadata, isJupyterNotebook, isPythonNotebook } from '../notebook/helpers/helpers';
+import { INotebookControllerManager } from '../notebook/types';
 import { IInteractiveWindow, IInteractiveWindowProvider } from '../types';
 
 @injectable()
@@ -35,6 +34,7 @@ export class ActiveEditorContextService implements IExtensionSingleActivationSer
     private hasNativeNotebookCells: ContextKey;
     private isPythonFileActive: boolean = false;
     private isPythonNotebook: ContextKey;
+    private isJupyterKernelSelected: ContextKey;
     private hasNativeNotebookOrInteractiveWindowOpen: ContextKey;
     constructor(
         @inject(IInteractiveWindowProvider) private readonly interactiveProvider: IInteractiveWindowProvider,
@@ -42,7 +42,8 @@ export class ActiveEditorContextService implements IExtensionSingleActivationSer
         @inject(ICommandManager) private readonly commandManager: ICommandManager,
         @inject(IDisposableRegistry) disposables: IDisposableRegistry,
         @inject(IVSCodeNotebook) private readonly vscNotebook: IVSCodeNotebook,
-        @inject(IKernelProvider) private readonly kernelProvider: IKernelProvider
+        @inject(IKernelProvider) private readonly kernelProvider: IKernelProvider,
+        @inject(INotebookControllerManager) private readonly controllers: INotebookControllerManager
     ) {
         disposables.push(this);
         this.nativeContext = new ContextKey(EditorContexts.IsNativeActive, this.commandManager);
@@ -78,6 +79,7 @@ export class ActiveEditorContextService implements IExtensionSingleActivationSer
         );
         this.hasNativeNotebookCells = new ContextKey(EditorContexts.HaveNativeCells, this.commandManager);
         this.isPythonNotebook = new ContextKey(EditorContexts.IsPythonNotebook, this.commandManager);
+        this.isJupyterKernelSelected = new ContextKey(EditorContexts.IsJupyterKernelSelected, this.commandManager);
         this.hasNativeNotebookOrInteractiveWindowOpen = new ContextKey(
             EditorContexts.HasNativeNotebookOrInteractiveWindowOpen,
             this.commandManager
@@ -121,6 +123,12 @@ export class ActiveEditorContextService implements IExtensionSingleActivationSer
             this,
             this.disposables
         );
+        this.controllers.onNotebookControllerSelectionChanged(
+            () => this.updateSelectedKernelContext(),
+            this,
+            this.disposables
+        );
+        this.updateSelectedKernelContext();
     }
 
     private updateNativeNotebookCellContext() {
@@ -162,29 +170,41 @@ export class ActiveEditorContextService implements IExtensionSingleActivationSer
                 ? this.kernelProvider.get(activeEditor.document)
                 : undefined;
         if (kernel) {
-            const canStart = kernel.status !== ServerStatus.NotStarted;
+            const canStart = kernel.status !== 'unknown';
             this.canRestartNotebookKernelContext.set(!!canStart).ignoreErrors();
-            const canInterrupt = kernel.status === ServerStatus.Busy;
+            const canInterrupt = kernel.status === 'busy';
             this.canInterruptNotebookKernelContext.set(!!canInterrupt).ignoreErrors();
         } else {
             this.canRestartNotebookKernelContext.set(false).ignoreErrors();
             this.canInterruptNotebookKernelContext.set(false).ignoreErrors();
+        }
+        this.updateSelectedKernelContext();
+    }
+    private updateSelectedKernelContext() {
+        const document =
+            this.vscNotebook.activeNotebookEditor?.document ||
+            getActiveInteractiveWindow(this.interactiveProvider)?.notebookEditor?.document;
+        if (document && isJupyterNotebook(document) && this.controllers.getSelectedNotebookController(document)) {
+            this.isJupyterKernelSelected.set(true).catch(noop);
+        } else {
+            this.isJupyterKernelSelected.set(false).catch(noop);
         }
     }
     private updateContextOfActiveInteractiveWindowKernel() {
         const notebook = getActiveInteractiveWindow(this.interactiveProvider)?.notebookEditor?.document;
         const kernel = notebook ? this.kernelProvider.get(notebook) : undefined;
         if (kernel) {
-            const canStart = kernel.status !== ServerStatus.NotStarted;
+            const canStart = kernel.status !== 'unknown';
             this.canRestartInteractiveWindowKernelContext.set(!!canStart).ignoreErrors();
-            const canInterrupt = kernel.status === ServerStatus.Busy;
+            const canInterrupt = kernel.status === 'busy';
             this.canInterruptInteractiveWindowKernelContext.set(!!canInterrupt).ignoreErrors();
         } else {
             this.canRestartInteractiveWindowKernelContext.set(false).ignoreErrors();
             this.canInterruptInteractiveWindowKernelContext.set(false).ignoreErrors();
         }
+        this.updateSelectedKernelContext();
     }
-    private onDidKernelStatusChange({ kernel }: { status: ServerStatus; kernel: IKernel }) {
+    private onDidKernelStatusChange({ kernel }: { kernel: IKernel }) {
         if (kernel.notebookDocument.notebookType === InteractiveWindowView) {
             this.updateContextOfActiveInteractiveWindowKernel();
         } else if (

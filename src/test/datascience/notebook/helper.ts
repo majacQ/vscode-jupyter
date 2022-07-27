@@ -136,12 +136,18 @@ export async function deleteAllCellsAndWait() {
 }
 
 export async function createTemporaryFile(options: {
-    templateFile: string;
-    dir: string;
+    templateFile?: string;
+    contents?: string;
+    extension?: string;
+    dir?: string;
 }): Promise<{ file: string } & IDisposable> {
-    const extension = path.extname(options.templateFile);
+    const extension = options.templateFile ? path.extname(options.templateFile) : options.extension || '.py';
     const tempFile = tmp.tmpNameSync({ postfix: extension, dir: options.dir });
-    await fs.copyFile(options.templateFile, tempFile);
+    if (options.templateFile) {
+        await fs.copyFile(options.templateFile, tempFile);
+    } else if (options.contents) {
+        await fs.writeFile(tempFile, options.contents);
+    }
     return { file: tempFile, dispose: () => swallowExceptions(() => fs.unlinkSync(tempFile)) };
 }
 
@@ -190,7 +196,7 @@ export async function canRunNotebookTests() {
 export async function shutdownAllNotebooks() {
     const api = await initialize();
     const kernelProvider = api.serviceContainer.get<IKernelProvider>(IKernelProvider);
-    await kernelProvider.dispose();
+    await Promise.all(kernelProvider.kernels.map((k) => k.dispose().catch(noop)));
 }
 
 export async function ensureNewNotebooksHavePythonCells() {
@@ -697,7 +703,7 @@ function getOutputText(output: NotebookCellOutputItem) {
     ) {
         return '';
     }
-    return Buffer.from(output.data as Uint8Array).toString('utf8');
+    return Buffer.from(output.data).toString('utf8');
 }
 function hasTextOutputValue(output: NotebookCellOutputItem, value: string, isExactMatch = true) {
     if (
@@ -709,7 +715,7 @@ function hasTextOutputValue(output: NotebookCellOutputItem, value: string, isExa
         return false;
     }
     try {
-        const haystack = Buffer.from(output.data as Uint8Array).toString('utf8');
+        const haystack = Buffer.from(output.data).toString('utf8');
         return isExactMatch
             ? haystack === value || haystack.trim() === value
             : haystack.toLowerCase().includes(value.toLowerCase());
@@ -724,7 +730,7 @@ export function assertHasTextOutputInVSCode(cell: NotebookCell, text: string, in
     assert.isTrue(
         result,
         `${text} not found in outputs of cell ${cell.index} ${cell.outputs[index].items
-            .map((o) => (o.data ? Buffer.from(o.data as Uint8Array).toString('utf8') : ''))
+            .map((o) => (o.data ? Buffer.from(o.data).toString('utf8') : ''))
             .join(' ')}`
     );
     return result;

@@ -7,14 +7,20 @@ import { assert } from 'chai';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { IPythonApiProvider } from '../../client/api/types';
-import { PYTHON_LANGUAGE } from '../../client/common/constants';
+import { traceInfo, traceInfoIfCI } from '../../client/common/logger';
+import { getDisplayPath } from '../../client/common/platform/fs-paths';
 import { IDisposable } from '../../client/common/types';
-import { InteractiveWindow } from '../../client/datascience/interactive-window/interactiveWindow';
 import { InteractiveWindowProvider } from '../../client/datascience/interactive-window/interactiveWindowProvider';
 import { INotebookControllerManager } from '../../client/datascience/notebook/types';
 import { IInteractiveWindowProvider } from '../../client/datascience/types';
-import { captureScreenShot, IExtensionTestApi, sleep, waitForCondition } from '../common';
+import { IExtensionTestApi, sleep, waitForCondition } from '../common';
 import { initialize, IS_REMOTE_NATIVE_TEST } from '../initialize';
+import {
+    createStandaloneInteractiveWindow,
+    insertIntoInputEditor,
+    submitFromPythonFile,
+    waitForLastCellToComplete
+} from './helpers';
 import {
     assertHasTextOutputInVSCode,
     assertNotHasTextOutputInVSCode,
@@ -25,7 +31,7 @@ import {
 } from './notebook/helper';
 
 suite('Interactive window', async function () {
-    this.timeout(60_000);
+    this.timeout(120_000);
     let api: IExtensionTestApi;
     const disposables: IDisposable[] = [];
     let interactiveWindowProvider: InteractiveWindowProvider;
@@ -34,21 +40,20 @@ suite('Interactive window', async function () {
         if (IS_REMOTE_NATIVE_TEST) {
             return this.skip();
         }
+        traceInfo(`Start Test ${this.currentTest?.title}`);
         api = await initialize();
         interactiveWindowProvider = api.serviceManager.get(IInteractiveWindowProvider);
+        traceInfo(`Start Test (completed) ${this.currentTest?.title}`);
     });
-
     teardown(async function () {
-        if (this.currentTest?.isFailed()) {
-            await captureScreenShot(`Interactive Window-${this.currentTest?.title}`);
-        }
+        traceInfo(`Ended Test ${this.currentTest?.title}`);
         sinon.restore();
         await closeNotebooksAndCleanUpAfterTests(disposables);
     });
 
     test('Execute cell from Python file', async () => {
         const source = 'print(42)';
-        const { activeInteractiveWindow } = await submitFromPythonFile(source);
+        const { activeInteractiveWindow } = await submitFromPythonFile(interactiveWindowProvider, source, disposables);
         const notebookDocument = vscode.workspace.notebookDocuments.find(
             (doc) => doc.uri.toString() === activeInteractiveWindow?.notebookUri?.toString()
         );
@@ -69,7 +74,7 @@ suite('Interactive window', async function () {
         assert.equal(
             controller?.connection.interpreter?.path,
             activeInterpreter?.path,
-            `Controller does not match active interpreter for ${notebookDocument?.uri.toString()}`
+            `Controller does not match active interpreter for ${getDisplayPath(notebookDocument?.uri)}`
         );
 
         // Verify sys info cell
@@ -84,26 +89,27 @@ suite('Interactive window', async function () {
         await waitForExecutionCompletedSuccessfully(secondCell!);
         assertHasTextOutputInVSCode(secondCell!, '42');
     });
-
-    test('__file__ exists even after restarting a kernel', async () => {
+    test('__file__ exists even after restarting a kernel', async function () {
         // Ensure we click `Yes` when prompted to restart the kernel.
         disposables.push(await clickOKForRestartPrompt());
 
         const source = 'print(__file__)';
-        const { activeInteractiveWindow, untitledPythonFile } = await submitFromPythonFile(source);
+        const { activeInteractiveWindow, untitledPythonFile } = await submitFromPythonFile(
+            interactiveWindowProvider,
+            source,
+            disposables
+        );
         const notebookDocument = vscode.workspace.notebookDocuments.find(
             (doc) => doc.uri.toString() === activeInteractiveWindow?.notebookUri?.toString()
         )!;
         const notebookControllerManager = api.serviceManager.get<INotebookControllerManager>(
             INotebookControllerManager
         );
-        console.log('Step1');
         // Ensure we picked up the active interpreter for use as the kernel
         const pythonApi = await api.serviceManager.get<IPythonApiProvider>(IPythonApiProvider).getApi();
 
         // Give it a bit to warm up
         await sleep(500);
-        console.log('Step2');
 
         const controller = notebookDocument
             ? notebookControllerManager.getSelectedNotebookController(notebookDocument)
@@ -112,10 +118,9 @@ suite('Interactive window', async function () {
         assert.equal(
             controller?.connection.interpreter?.path,
             activeInterpreter?.path,
-            `Controller does not match active interpreter for ${notebookDocument?.uri.toString()}`
+            `Controller does not match active interpreter for ${getDisplayPath(notebookDocument?.uri)}`
         );
 
-        console.log('Step3');
         async function verifyCells() {
             // Verify sys info cell
             const firstCell = notebookDocument.cellAt(0);
@@ -129,45 +134,35 @@ suite('Interactive window', async function () {
             await waitForExecutionCompletedSuccessfully(secondCell!);
         }
 
-        console.log('Step4');
         await verifyCells();
-        console.log('Step5');
 
         // CLear all cells
         await vscode.commands.executeCommand('jupyter.interactive.clearAllCells');
-        console.log('Step6');
         await waitForCondition(async () => notebookDocument.cellCount === 0, 5_000, 'Cells not cleared');
-        console.log('Step7');
 
         // Restart kernel
         await vscode.commands.executeCommand('jupyter.restartkernel');
-        console.log('Step8');
         // Wait for first cell to get output.
         await waitForCondition(
             async () => notebookDocument.cellCount > 0,
             defaultNotebookTestTimeout,
             'Kernel info not printed'
         );
-        console.log('Step9');
         await activeInteractiveWindow.addCode(source, untitledPythonFile.uri, 0);
-        console.log('Step10');
         await waitForCondition(
             async () => notebookDocument.cellCount > 1,
             defaultNotebookTestTimeout,
             'Code not executed'
         );
-        console.log('Step11');
 
         await verifyCells();
     });
     test('Execute cell from input box', async () => {
         // Create new interactive window
-        const activeInteractiveWindow = (await interactiveWindowProvider.getOrCreate(undefined)) as InteractiveWindow;
+        const activeInteractiveWindow = await createStandaloneInteractiveWindow(interactiveWindowProvider);
 
         // Add code to the input box
-        await vscode.window.activeTextEditor?.edit((editBuilder) => {
-            editBuilder.insert(new vscode.Position(0, 0), 'print("foo")');
-        });
+        await insertIntoInputEditor('print("foo")');
 
         // Run the code in the input box
         await vscode.commands.executeCommand('interactive.execute');
@@ -192,7 +187,7 @@ for i in range(10):
     clear_output()
     print("Hello World {0}!".format(i))
 `;
-        const { activeInteractiveWindow } = await submitFromPythonFile(text);
+        const { activeInteractiveWindow } = await submitFromPythonFile(interactiveWindowProvider, text, disposables);
         const cell = await waitForLastCellToComplete(activeInteractiveWindow);
         assertHasTextOutputInVSCode(cell!, 'Hello World 9!');
     });
@@ -220,7 +215,11 @@ for i in range(10):
 
     test('Collapse / expand cell', async () => {
         // Cell should initially be collapsed
-        const { activeInteractiveWindow, untitledPythonFile } = await submitFromPythonFile('a=1\na');
+        const { activeInteractiveWindow, untitledPythonFile } = await submitFromPythonFile(
+            interactiveWindowProvider,
+            'a=1\na',
+            disposables
+        );
         const codeCell = await waitForLastCellToComplete(activeInteractiveWindow);
         assert.ok(codeCell.metadata.inputCollapsed === true, 'Cell input not initially collapsed');
 
@@ -358,7 +357,13 @@ ${actualCode}
 
 
 `;
-        const { activeInteractiveWindow: interactiveWindow } = await submitFromPythonFile(codeWithWhitespace);
+        traceInfoIfCI('Before submitting');
+        const { activeInteractiveWindow: interactiveWindow } = await submitFromPythonFile(
+            interactiveWindowProvider,
+            codeWithWhitespace,
+            disposables
+        );
+        traceInfoIfCI('After submitting');
         const lastCell = await waitForLastCellToComplete(interactiveWindow);
         const actualCellText = lastCell.document.getText();
         assert.equal(actualCellText, actualCode);
@@ -370,7 +375,7 @@ ${actualCode}
         const code = `# %%
 #!%%time
 print('hi')`;
-        const { activeInteractiveWindow } = await submitFromPythonFile(code);
+        const { activeInteractiveWindow } = await submitFromPythonFile(interactiveWindowProvider, code, disposables);
         const lastCell = await waitForLastCellToComplete(activeInteractiveWindow);
         assertHasTextOutputInVSCode(lastCell, 'hi', undefined, false);
         return lastCell;
@@ -400,48 +405,3 @@ print('hi')`;
     // test('Should skip empty cells from #%% file or input box', () => { });
     // test('Export', () => { });
 });
-
-async function createStandaloneInteractiveWindow(interactiveWindowProvider: InteractiveWindowProvider) {
-    const activeInteractiveWindow = (await interactiveWindowProvider.getOrCreate(undefined)) as InteractiveWindow;
-    return activeInteractiveWindow;
-}
-
-async function insertIntoInputEditor(source: string) {
-    // Add code to the input box
-    await vscode.window.activeTextEditor?.edit((editBuilder) => {
-        editBuilder.insert(new vscode.Position(0, 0), source);
-    });
-}
-
-export async function submitFromPythonFile(source: string) {
-    const api = await initialize();
-    const interactiveWindowProvider = api.serviceManager.get<InteractiveWindowProvider>(IInteractiveWindowProvider);
-    const untitledPythonFile = await vscode.workspace.openTextDocument({
-        language: PYTHON_LANGUAGE,
-        content: source
-    });
-    await vscode.window.showTextDocument(untitledPythonFile);
-    const activeInteractiveWindow = (await interactiveWindowProvider.getOrCreate(
-        untitledPythonFile.uri
-    )) as InteractiveWindow;
-    await activeInteractiveWindow.addCode(source, untitledPythonFile.uri, 0);
-    return { activeInteractiveWindow, untitledPythonFile };
-}
-
-async function waitForLastCellToComplete(interactiveWindow: InteractiveWindow) {
-    const notebookDocument = vscode.workspace.notebookDocuments.find(
-        (doc) => doc.uri.toString() === interactiveWindow?.notebookUri?.toString()
-    );
-    const cells = notebookDocument?.getCells();
-    assert.ok(notebookDocument !== undefined, 'Interactive window notebook document not found');
-    let codeCell: vscode.NotebookCell | undefined;
-    for (let i = cells!.length - 1; i >= 0; i -= 1) {
-        if (cells![i].kind === vscode.NotebookCellKind.Code) {
-            codeCell = cells![i];
-            break;
-        }
-    }
-    assert.ok(codeCell !== undefined, 'No code cell found in interactive window notebook document');
-    await waitForExecutionCompletedSuccessfully(codeCell!);
-    return codeCell!;
-}

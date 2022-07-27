@@ -27,12 +27,12 @@ import {
 } from '../../common/types';
 import { sleep } from '../../common/utils/async';
 import * as localize from '../../common/utils/localize';
+import { SessionDisposedError } from '../errors/sessionDisposedError';
 import {
     IJupyterConnection,
     IJupyterKernel,
     IJupyterKernelSpec,
     IJupyterPasswordConnect,
-    IJupyterSession,
     IJupyterSessionManager
 } from '../types';
 import { createAuthorizingRequest } from './jupyterRequest';
@@ -172,11 +172,11 @@ export class JupyterSessionManager implements IJupyterSessionManager {
 
     public async startNew(
         resource: Resource,
-        kernelConnection: KernelConnectionMetadata | undefined,
+        kernelConnection: KernelConnectionMetadata,
         workingDirectory: string,
         cancelToken?: CancellationToken,
         disableUI?: boolean
-    ): Promise<IJupyterSession> {
+    ): Promise<JupyterSession> {
         if (
             !this.connInfo ||
             !this.sessionManager ||
@@ -184,7 +184,7 @@ export class JupyterSessionManager implements IJupyterSessionManager {
             !this.serverSettings ||
             !this.specsManager
         ) {
-            throw new Error(localize.DataScience.sessionDisposed());
+            throw new SessionDisposedError();
         }
         // Create a new session and attempt to connect to it
         const session = new JupyterSession(
@@ -198,11 +198,12 @@ export class JupyterSessionManager implements IJupyterSessionManager {
             this.restartSessionCreatedEvent.fire.bind(this.restartSessionCreatedEvent),
             this.restartSessionUsedEvent.fire.bind(this.restartSessionUsedEvent),
             workingDirectory,
-            this.configService.getSettings().jupyterLaunchTimeout,
-            this.kernelService
+            this.configService.getSettings(resource).jupyterLaunchTimeout,
+            this.kernelService,
+            this.configService.getSettings(resource).jupyterInterruptTimeout
         );
         try {
-            await session.connect(this.configService.getSettings().jupyterLaunchTimeout, cancelToken, disableUI);
+            await session.connect(cancelToken, disableUI);
         } finally {
             if (!session.isConnected) {
                 await session.dispose();
@@ -213,7 +214,7 @@ export class JupyterSessionManager implements IJupyterSessionManager {
 
     public async getKernelSpecs(): Promise<IJupyterKernelSpec[]> {
         if (!this.connInfo || !this.sessionManager || !this.contentsManager) {
-            throw new Error(localize.DataScience.sessionDisposed());
+            throw new SessionDisposedError();
         }
         try {
             // Fetch the list the session manager already knows about. Refreshing may not work.

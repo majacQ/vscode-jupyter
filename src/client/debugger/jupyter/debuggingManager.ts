@@ -21,9 +21,7 @@ import * as path from 'path';
 import { IKernel, IKernelProvider } from '../../datascience/jupyter/kernels/types';
 import { IConfigurationService, IDisposable } from '../../common/types';
 import { KernelDebugAdapter } from './kernelDebugAdapter';
-import { INotebookProvider } from '../../datascience/types';
 import { IExtensionSingleActivationService } from '../../activation/types';
-import { ServerStatus } from '../../../datascience-ui/interactive-common/mainState';
 import { INotebookControllerManager } from '../../datascience/notebook/types';
 import { ContextKey } from '../../common/contextKey';
 import { EditorContexts } from '../../datascience/constants';
@@ -38,7 +36,7 @@ import { sendTelemetryEvent } from '../../telemetry';
 import { DebugCellController, RunByLineController } from './debugControllers';
 import { assertIsDebugConfig, IpykernelCheckResult, isUsingIpykernel6OrLater } from './helper';
 import { Debugger } from './debugger';
-import { IpyKernelNotInstalledError } from '../../datascience/kernel-launcher/types';
+import { IpyKernelNotInstalledError } from '../../datascience/errors/ipyKernelNotInstalledError';
 
 /**
  * The DebuggingManager maintains the mapping between notebook documents and debug sessions.
@@ -56,7 +54,6 @@ export class DebuggingManager implements IExtensionSingleActivationService, IDeb
 
     public constructor(
         @inject(IKernelProvider) private kernelProvider: IKernelProvider,
-        @inject(INotebookProvider) private notebookProvider: INotebookProvider,
         @inject(INotebookControllerManager) private readonly notebookControllerManager: INotebookControllerManager,
         @inject(ICommandManager) private readonly commandManager: ICommandManager,
         @inject(IApplicationShell) private readonly appShell: IApplicationShell,
@@ -307,7 +304,7 @@ export class DebuggingManager implements IExtensionSingleActivationService, IDeb
         const opts: DebugSessionOptions | undefined =
             mode === KernelDebugMode.RunByLine
                 ? { debugUI: { simple: true }, suppressSaveBeforeStart: true }
-                : undefined;
+                : { suppressSaveBeforeStart: true };
         return this.startDebuggingConfig(doc, config, opts);
     }
 
@@ -367,14 +364,9 @@ export class DebuggingManager implements IExtensionSingleActivationService, IDeb
             const debug = this.getDebuggerByUri(activeDoc);
 
             if (debug) {
-                const notebook = await this.notebookProvider.getOrCreateNotebook({
-                    resource: debug.document.uri,
-                    identity: debug.document.uri,
-                    getOnly: true
-                });
-                if (notebook && notebook.session) {
+                if (kernel?.session) {
                     debug.resolve(session);
-                    const adapter = new KernelDebugAdapter(session, debug.document, notebook.session, this.fs, kernel);
+                    const adapter = new KernelDebugAdapter(session, debug.document, kernel.session, this.fs, kernel);
 
                     if (config.__mode === KernelDebugMode.RunByLine && typeof config.__cellIndex === 'number') {
                         const cell = activeDoc.cellAt(config.__cellIndex);
@@ -425,7 +417,7 @@ export class DebuggingManager implements IExtensionSingleActivationService, IDeb
                 resourceUri: doc.uri
             });
         }
-        if (kernel && kernel.status === ServerStatus.NotStarted) {
+        if (kernel && kernel.status === 'unknown') {
             await kernel.start();
         }
 

@@ -33,6 +33,8 @@ import {
     ICodeWatcher,
     IDataScienceCodeLensProvider,
     IDataScienceCommandListener,
+    IDataScienceErrorHandler,
+    IInteractiveWindowProvider,
     IJupyterServerUriStorage,
     IJupyterVariableDataProviderFactory,
     IJupyterVariables
@@ -69,7 +71,9 @@ export class CommandRegistry implements IDisposable {
         @inject(IJupyterServerUriStorage) private readonly serverUriStorage: IJupyterServerUriStorage,
         @inject(IJupyterVariables) @named(Identifiers.DEBUGGER_VARIABLES) private variableProvider: IJupyterVariables,
         @inject(NotebookCreator) private readonly nativeNotebookCreator: NotebookCreator,
-        @inject(IWorkspaceService) private readonly workspace: IWorkspaceService
+        @inject(IWorkspaceService) private readonly workspace: IWorkspaceService,
+        @inject(IInteractiveWindowProvider) private readonly interactiveWindowProvider: IInteractiveWindowProvider,
+        @inject(IDataScienceErrorHandler) private readonly errorHandler: IDataScienceErrorHandler
     ) {
         this.disposables.push(this.serverSelectedCommand);
         this.disposables.push(this.notebookCommands);
@@ -352,9 +356,19 @@ export class CommandRegistry implements IDisposable {
     }
 
     @captureTelemetry(Telemetry.DebugStop)
-    private async debugStop(): Promise<void> {
+    private async debugStop(uri: Uri): Promise<void> {
         // Make sure that we are in debug mode
         if (this.debugService.activeDebugSession) {
+            // Attempt to get the interactive window for this file
+            const iw = this.interactiveWindowProvider.windows.find((w) => w.owner?.toString() == uri.toString());
+            if (iw) {
+                const kernel = await iw.kernelPromise;
+                if (kernel) {
+                    // If we have a matching iw, then stop current execution
+                    await kernel.interrupt();
+                }
+            }
+
             void this.commandManager.executeCommand('workbench.action.debug.stop');
         }
     }
@@ -545,7 +559,7 @@ export class CommandRegistry implements IDisposable {
             } catch (e) {
                 sendTelemetryEvent(EventName.OPEN_DATAVIEWER_FROM_VARIABLE_WINDOW_ERROR, undefined, undefined, e);
                 traceError(e);
-                void this.appShell.showErrorMessage(e.toString());
+                void this.errorHandler.handleError(e);
             }
         }
     }

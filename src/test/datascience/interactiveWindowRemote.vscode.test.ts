@@ -4,10 +4,11 @@
 'use strict';
 
 import { assert } from 'chai';
-import { workspace } from 'vscode';
+import { workspace, Disposable } from 'vscode';
 import { traceInfo } from '../../client/common/logger';
+import { IInteractiveWindowProvider } from '../../client/datascience/types';
 import { initialize, IS_REMOTE_NATIVE_TEST } from '../initialize';
-import { submitFromPythonFile } from './interactiveWindow.vscode.test';
+import { submitFromPythonFile } from './helpers';
 import {
     assertHasTextOutputInVSCode,
     closeNotebooksAndCleanUpAfterTests,
@@ -16,11 +17,14 @@ import {
 } from './notebook/helper';
 
 suite('Interactive window (remote)', async () => {
+    let interactiveWindowProvider: IInteractiveWindowProvider;
+    let disposables: Disposable[] = [];
     setup(async function () {
         if (!IS_REMOTE_NATIVE_TEST) {
             return this.skip();
         }
-        await initialize();
+        const api = await initialize();
+        interactiveWindowProvider = api.serviceContainer.get<IInteractiveWindowProvider>(IInteractiveWindowProvider);
         await startJupyterServer();
     });
     teardown(async function () {
@@ -28,10 +32,10 @@ suite('Interactive window (remote)', async () => {
         await closeNotebooksAndCleanUpAfterTests();
         traceInfo(`Ended Test (completed) ${this.currentTest?.title}`);
     });
-    suiteTeardown(() => closeNotebooksAndCleanUpAfterTests());
+    suiteTeardown(() => closeNotebooksAndCleanUpAfterTests(disposables));
 
     async function runCellInRemoveInteractiveWindow(source: string) {
-        const { activeInteractiveWindow } = await submitFromPythonFile(source);
+        const { activeInteractiveWindow } = await submitFromPythonFile(interactiveWindowProvider, source, disposables);
         const notebookDocument = workspace.notebookDocuments.find(
             (doc) => doc.uri.toString() === activeInteractiveWindow?.notebookUri?.toString()
         );

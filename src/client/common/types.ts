@@ -68,7 +68,8 @@ export enum Product {
     notebook = 20,
     kernelspec = 21,
     nbconvert = 22,
-    pandas = 23
+    pandas = 23,
+    pip = 27
 }
 
 export enum ProductInstallStatus {
@@ -89,7 +90,8 @@ export interface IInstaller {
         product: Product,
         resource: InterpreterUri,
         cancel?: CancellationToken,
-        reInstallAndUpdate?: boolean
+        reInstallAndUpdate?: boolean,
+        installPipIfRequired?: boolean
     ): Promise<InstallerResponse>;
     isInstalled(product: Product, resource: InterpreterUri): Promise<boolean | undefined>;
     translateProductToModuleName(product: Product, purpose: ModuleNamePurpose): string;
@@ -155,6 +157,7 @@ export interface IJupyterSettings {
     readonly stopOnFirstLineWhileDebugging: boolean;
     readonly textOutputLimit: number;
     readonly magicCommandsAsComments: boolean;
+    readonly pythonExportMethod: string;
     readonly stopOnError: boolean;
     readonly remoteDebuggerPort: number;
     readonly colorizeInputBox: boolean;
@@ -172,8 +175,12 @@ export interface IJupyterSettings {
     readonly alwaysScrollOnNewCell: boolean;
     readonly interactiveWindowMode: InteractiveWindowMode;
     readonly disableZMQSupport: boolean;
+    readonly disablePythonDaemon: boolean;
     readonly variableTooltipFields: IVariableTooltipFields;
     readonly showVariableViewWhenDebugging: boolean;
+    readonly newCellOnRunLast: boolean;
+    readonly pylanceHandlesNotebooks?: boolean;
+    readonly pythonCompletionTriggerCharacters?: string;
 }
 
 export interface IVariableTooltipFields {

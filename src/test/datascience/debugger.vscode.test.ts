@@ -6,8 +6,8 @@ import { ICommandManager, IVSCodeNotebook } from '../../client/common/applicatio
 import { IDisposable } from '../../client/common/types';
 import { Commands } from '../../client/datascience/constants';
 import { IVariableViewProvider } from '../../client/datascience/variablesView/types';
-import { IExtensionTestApi, waitForCondition } from '../common';
-import { initialize, IS_REMOTE_NATIVE_TEST, IS_WEBVIEW_BUILD_SKIPPED } from '../initialize';
+import { captureScreenShot, IExtensionTestApi, waitForCondition } from '../common';
+import { initialize, IS_REMOTE_NATIVE_TEST } from '../initialize';
 import {
     canRunNotebookTests,
     closeNotebooks,
@@ -29,7 +29,6 @@ import { assert } from 'chai';
 import { debug } from 'vscode';
 import { ITestWebviewHost } from './testInterfaces';
 import { DebugProtocol } from 'vscode-debugprotocol';
-import { sleep } from '../../client/common/utils/async';
 import { waitForVariablesToMatch } from './variableView/variableViewHelpers';
 
 suite('VSCode Notebook - Run By Line', function () {
@@ -43,13 +42,6 @@ suite('VSCode Notebook - Run By Line', function () {
     suiteSetup(async function () {
         traceInfo(`Start Test Suite`);
         this.timeout(120_000);
-
-        // We need to have webviews built to run this, so skip if we don't have them
-        if (IS_WEBVIEW_BUILD_SKIPPED) {
-            console.log('Debugging tests require webview build to be enabled (for the variable view)');
-            return this.skip();
-        }
-
         // Don't run if we can't use the native notebook interface
         if (IS_REMOTE_NATIVE_TEST || !(await canRunNotebookTests())) {
             return this.skip();
@@ -78,6 +70,10 @@ suite('VSCode Notebook - Run By Line', function () {
     });
     teardown(async function () {
         traceInfo(`Ended Test ${this.currentTest?.title}`);
+        if (this.currentTest?.isFailed()) {
+            // For a flaky interrupt test.
+            await captureScreenShot(`Debugger-Tests-${this.currentTest?.title}`);
+        }
         await closeNotebooks(disposables);
         await closeNotebooksAndCleanUpAfterTests(disposables);
         traceInfo(`Ended Test (completed) ${this.currentTest?.title}`);
@@ -126,7 +122,7 @@ suite('VSCode Notebook - Run By Line', function () {
         assert.isTrue(getCellOutputs(cell).includes('1'));
     });
 
-    test('Interrupt', async function () {
+    test('Interrupt during debugging', async function () {
         await insertCodeCell('a=1\na', { index: 0 });
         const doc = vscodeNotebook.activeNotebookEditor?.document!;
         const cell = doc.getCells()[0];
@@ -136,17 +132,12 @@ suite('VSCode Notebook - Run By Line', function () {
 
         await waitForStoppedEvent(debugAdapter!);
 
-        // Interrupt kernel and check that the cell didn't finish running
+        // Interrupt kernel and check we finished
         await commandManager.executeCommand(Commands.InterruptKernel, { notebookEditor: { notebookUri: doc.uri } });
         await waitForCondition(
             async () => !debug.activeDebugSession,
             defaultNotebookTestTimeout,
             'DebugSession should end'
-        );
-        await waitForCondition(
-            async () => getCellOutputs(cell).includes('KeyboardInterrupt'),
-            defaultNotebookTestTimeout,
-            'Cell should have KeyboardInterrupt output'
         );
     });
 
@@ -207,7 +198,12 @@ suite('VSCode Notebook - Run By Line', function () {
     });
 
     test('Run a second time after interrupt', async function () {
-        await insertCodeCell('print(1)', { index: 0 });
+        await insertCodeCell(
+            'import time\nfor i in range(0,50):\n  time.sleep(.1)\n  print("sleepy")\nprint("final output")',
+            {
+                index: 0
+            }
+        );
         const doc = vscodeNotebook.activeNotebookEditor?.document!;
         const cell = doc.getCells()[0];
 
@@ -223,29 +219,26 @@ suite('VSCode Notebook - Run By Line', function () {
             defaultNotebookTestTimeout,
             'DebugSession should end1'
         );
-        await waitForCondition(
-            async () => getCellOutputs(cell).includes('KeyboardInterrupt'),
-            defaultNotebookTestTimeout,
-            'Cell should have KeyboardInterrupt output'
-        );
+        assert.isFalse(getCellOutputs(cell).includes('final output'), `Final line did run even with an interrupt`);
 
+        // Start over and make sure we can execute all lines
         void commandManager.executeCommand(Commands.RunByLine, cell);
         const { debugAdapter: debugAdapter2 } = await getDebugSessionAndAdapter(debuggingManager, doc);
-
         await waitForStoppedEvent(debugAdapter2!);
-        await sleep(500); //
-        await commandManager.executeCommand(Commands.RunByLineNext, cell);
-
+        await waitForCondition(
+            async () => {
+                await commandManager.executeCommand(Commands.RunByLineNext, cell);
+                await waitForStoppedEvent(debugAdapter2!);
+                return getCellOutputs(cell).includes('sleepy');
+            },
+            defaultNotebookTestTimeout,
+            'Print during time loop is not working'
+        );
+        await commandManager.executeCommand(Commands.RunByLineStop);
         await waitForCondition(
             async () => !debug.activeDebugSession,
             defaultNotebookTestTimeout,
             'DebugSession should end2'
         );
-        await waitForCondition(
-            async () => !!cell.outputs.length,
-            defaultNotebookTestTimeout,
-            'Cell should have output'
-        );
-        assert.isTrue(getCellOutputs(cell).includes('1'));
     });
 });

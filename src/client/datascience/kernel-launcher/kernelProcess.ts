@@ -3,21 +3,25 @@
 'use strict';
 
 import { ChildProcess } from 'child_process';
+import { kill } from 'process';
 import * as fs from 'fs-extra';
 import * as tmp from 'tmp';
 import { CancellationToken, Event, EventEmitter } from 'vscode';
 import { IPythonExtensionChecker } from '../../api/types';
 import { createPromiseFromCancellation } from '../../common/cancellation';
-import { getTelemetrySafeErrorMessageFromPythonTraceback } from '../../common/errors/errorUtils';
-import { traceDecorators, traceError, traceInfo, traceWarning } from '../../common/logger';
+import {
+    getErrorMessageFromPythonTraceback,
+    getTelemetrySafeErrorMessageFromPythonTraceback
+} from '../../common/errors/errorUtils';
+import { traceDecorators, traceError, traceInfo, traceVerbose, traceWarning } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
 import { IProcessServiceFactory, IPythonExecutionFactory, ObservableExecutionResult } from '../../common/process/types';
 import { Resource } from '../../common/types';
-import { createDeferred, TimedOutError } from '../../common/utils/async';
+import { createDeferred } from '../../common/utils/async';
 import * as localize from '../../common/utils/localize';
 import { noop, swallowExceptions } from '../../common/utils/misc';
 import { captureTelemetry } from '../../telemetry';
-import { Commands, Telemetry } from '../constants';
+import { Telemetry } from '../constants';
 import {
     connectionFilePlaceholder,
     findIndexOfConnectionFile,
@@ -28,14 +32,12 @@ import { IJupyterKernelSpec } from '../types';
 import { KernelDaemonPool } from './kernelDaemonPool';
 import { KernelEnvironmentVariablesService } from './kernelEnvVarsService';
 import { PythonKernelLauncherDaemon } from './kernelLauncherDaemon';
-import {
-    IKernelConnection,
-    IKernelProcess,
-    IPythonKernelDaemon,
-    KernelDiedError,
-    KernelProcessExited,
-    PythonKernelDiedError
-} from './types';
+import { IKernelConnection, IKernelProcess, IPythonKernelDaemon } from './types';
+import { BaseError } from '../../common/errors/types';
+import { KernelProcessExitedError } from '../errors/kernelProcessExitedError';
+import { PythonKernelDiedError } from '../errors/pythonKernelDiedError';
+import { KernelDiedError } from '../errors/kernelDiedError';
+import { KernelPortNotUsedTimeoutError } from '../errors/kernelPortNotUsedTimeoutError';
 
 // Launches and disposes a kernel process given a kernelspec and a resource or python interpreter.
 // Exposes connection information and the process itself.
@@ -52,12 +54,21 @@ export class KernelProcess implements IKernelProcess {
     private get isPythonKernel(): boolean {
         return isPythonKernelConnection(this.kernelConnectionMetadata);
     }
+    public get canInterrupt() {
+        if (this.pythonDaemon) {
+            return true;
+        }
+        if (this._kernelConnectionMetadata.kernelSpec.interrupt_mode === 'message') {
+            return false;
+        }
+        return true;
+    }
     private _process?: ChildProcess;
     private exitEvent = new EventEmitter<{ exitCode?: number; reason?: string }>();
     private pythonKernelLauncher?: PythonKernelLauncherDaemon;
     private launchedOnce?: boolean;
     private disposed?: boolean;
-    private kernelDaemon?: IPythonKernelDaemon;
+    private pythonDaemon?: IPythonKernelDaemon;
     private connectionFile?: string;
     private _launchKernelSpec?: IJupyterKernelSpec;
     private readonly _kernelConnectionMetadata: Readonly<KernelSpecConnectionMetadata | PythonKernelConnectionMetadata>;
@@ -75,8 +86,17 @@ export class KernelProcess implements IKernelProcess {
         this._kernelConnectionMetadata = kernelConnectionMetadata;
     }
     public async interrupt(): Promise<void> {
-        if (this.kernelDaemon) {
-            await this.kernelDaemon?.interrupt();
+        if (!this.canInterrupt) {
+            throw new Error('Kernel interrupt not supported in KernelProcess.ts');
+        }
+        if (this.pythonDaemon) {
+            traceInfo('Interrupting kernel via Daemon message');
+            await this.pythonDaemon.interrupt();
+        } else if (this._kernelConnectionMetadata.kernelSpec.interrupt_mode !== 'message' && this._process) {
+            traceInfo('Interrupting kernel via Signals');
+            kill(this._process.pid, 'SIGINT');
+        } else {
+            traceError('No process to interrupt in KernleProcess.ts');
         }
     }
 
@@ -111,16 +131,22 @@ export class KernelProcess implements IKernelProcess {
                 });
                 exitEventFired = true;
             }
-            deferred.reject(new KernelProcessExited(exitCode || -1));
+            deferred.reject(new KernelProcessExitedError(exitCode || -1, stderr));
         });
 
         exeObs.proc!.stdout?.on('data', (data: Buffer | string) => {
-            traceInfo(`KernelProcess output: ${(data || '').toString()}`);
+            // We get these from execObs.out.subscribe.
+            // Hence log only using traceLevel = verbose.
+            // But only useful if daemon doesn't start for any reason.
+            traceVerbose(`KernelProcess output: ${(data || '').toString()}`);
         });
 
         exeObs.proc!.stderr?.on('data', (data: Buffer | string) => {
+            // We get these from execObs.out.subscribe.
+            // Hence log only using traceLevel = verbose.
+            // But only useful if daemon doesn't start for any reason.
             stderrProc += data.toString();
-            traceInfo(`KernelProcess error: ${(data || '').toString()}`);
+            traceVerbose(`KernelProcess error: ${(data || '').toString()}`);
         });
 
         exeObs.out.subscribe(
@@ -171,41 +197,49 @@ export class KernelProcess implements IKernelProcess {
         // Don't return until our heartbeat channel is open for connections or the kernel died or we timed out
         try {
             const tcpPortUsed = require('tcp-port-used') as typeof import('tcp-port-used');
-            await Promise.race([
-                // Wait on shell port as this is used for communications (hence shell port is guaranteed to be used, where as heart beat isn't).
+            // Wait on shell port as this is used for communications (hence shell port is guaranteed to be used, where as heart beat isn't).
+            // Wait for shell & iopub to be used (iopub is where we get a response & this is similar to what Jupyter does today).
+            // Kernel must be connected to bo Shell & IoPub channels for kernel communication to work.
+            const portsUsed = Promise.all([
                 tcpPortUsed.waitUntilUsed(this.connection.shell_port, 200, timeout),
+                tcpPortUsed.waitUntilUsed(this.connection.iopub_port, 200, timeout)
+            ]).catch((ex) => {
+                traceError(`waitUntilUsed timed out`, ex);
+                // Throw an error we recognize.
+                return Promise.reject(new KernelPortNotUsedTimeoutError(this.kernelConnectionMetadata));
+            });
+            await Promise.race([
+                portsUsed,
                 deferred.promise,
                 createPromiseFromCancellation({
                     token: cancelToken,
-                    cancelAction: 'reject',
-                    defaultValue: undefined
+                    cancelAction: 'reject'
                 })
             ]);
         } catch (e) {
             traceError('Disposing kernel process due to an error', e);
-            // Make sure to dispose if we never get a heartbeat
-            this.dispose().ignoreErrors();
+            traceError(stderrProc || stderr);
+            // Make sure to dispose if we never connect.
+            void this.dispose();
 
-            if (
-                cancelToken?.isCancellationRequested ||
-                e instanceof KernelProcessExited ||
-                e instanceof PythonKernelDiedError
-            ) {
-                traceError(stderrProc || stderr);
-                // If we have the python error message, display that.
+            if (!cancelToken?.isCancellationRequested && e instanceof BaseError) {
+                throw e;
+            } else {
+                // Possible this isn't an error we recognize, hence wrap it in a user friendly message.
+                if (cancelToken?.isCancellationRequested) {
+                    traceWarning('User cancelled the kernel launch');
+                }
+                // If we have the python error message in std outputs, display that.
                 const errorMessage =
-                    getTelemetrySafeErrorMessageFromPythonTraceback(stderrProc || stderr) ||
+                    getErrorMessageFromPythonTraceback(stderrProc || stderr) ||
                     (stderrProc || stderr).substring(0, 100);
                 throw new KernelDiedError(
-                    localize.DataScience.kernelDied().format(Commands.ViewJupyterOutput, errorMessage),
+                    localize.DataScience.kernelDied().format(errorMessage),
                     // Include what ever we have as the stderr.
                     stderrProc + '\n' + stderr + '\n',
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     e as any
                 );
-            } else {
-                traceError('Timed out waiting to get a heartbeat from kernel process.');
-                throw new TimedOutError(localize.DataScience.kernelTimeout().format(Commands.ViewJupyterOutput));
             }
         }
     }
@@ -216,9 +250,9 @@ export class KernelProcess implements IKernelProcess {
             return;
         }
         this.disposed = true;
-        if (this.kernelDaemon) {
-            await this.kernelDaemon.kill().catch(noop);
-            swallowExceptions(() => this.kernelDaemon?.dispose());
+        if (this.pythonDaemon) {
+            await this.pythonDaemon.kill().catch(noop);
+            swallowExceptions(() => this.pythonDaemon?.dispose());
         }
         swallowExceptions(() => {
             this._process?.kill(); // NOSONAR
@@ -357,7 +391,7 @@ export class KernelProcess implements IKernelProcess {
                 this._kernelConnectionMetadata.interpreter
             );
 
-            this.kernelDaemon = kernelDaemonLaunch.daemon;
+            this.pythonDaemon = kernelDaemonLaunch.daemon;
             exeObs = kernelDaemonLaunch.observableOutput;
         }
 

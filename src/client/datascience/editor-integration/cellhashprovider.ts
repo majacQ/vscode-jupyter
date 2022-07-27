@@ -16,7 +16,8 @@ import {
     TextDocumentContentChangeEvent
 } from 'vscode';
 
-import { concatMultilineString, splitMultilineString } from '../../../datascience-ui/common';
+import { splitMultilineString } from '../../../datascience-ui/common';
+import { uncommentMagicCommands } from '../../../datascience-ui/common/cellFactory';
 import { IDebugService, IDocumentManager } from '../../common/application/types';
 import { traceInfo } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
@@ -24,7 +25,6 @@ import { IFileSystem } from '../../common/platform/types';
 import { IConfigurationService } from '../../common/types';
 import { getCellResource } from '../cellFactory';
 import { CellMatcher } from '../cellMatcher';
-import { Identifiers } from '../constants';
 import { getInteractiveCellMetadata } from '../interactive-window/interactiveWindow';
 import { IKernel } from '../jupyter/kernels/types';
 import { ICellHash, ICellHashListener, ICellHashProvider, IFileHashes } from '../types';
@@ -109,7 +109,7 @@ export class CellHashProvider implements ICellHashProvider {
     public async addCellHash(cell: NotebookCell) {
         // Skip non-code cells as they are never actually executed
         if (cell.kind !== NotebookCellKind.Code) {
-            return;
+            return undefined;
         }
         // Don't log empty cells
         const executableLines = this.extractExecutableLines(cell);
@@ -118,18 +118,20 @@ export class CellHashProvider implements ICellHashProvider {
             this.executionCount += 1;
 
             // Skip hash on unknown file though
-            if (
-                cell.metadata.interactive !== undefined &&
-                cell.metadata.interactive?.file !== Identifiers.EmptyFileName
-            ) {
-                await this.generateHash(cell, this.executionCount);
+            if (getInteractiveCellMetadata(cell)?.interactive?.file) {
+                return this.generateHash(cell, this.executionCount);
             }
         }
     }
 
     public extractExecutableLines(cell: NotebookCell): string[] {
-        const cellMatcher = new CellMatcher(this.configService.getSettings(getCellResource(cell)));
+        const settings = this.configService.getSettings(getCellResource(cell));
+        const cellMatcher = new CellMatcher(settings);
         const lines = splitMultilineString(cell.metadata.interactive?.originalSource ?? cell.document.getText());
+
+        if (settings.magicCommandsAsComments) {
+            lines.forEach((line, index) => (lines[index] = uncommentMagicCommands(line)));
+        }
 
         // Only strip this off the first line. Otherwise we want the markers in the code.
         if (lines.length > 0 && (cellMatcher.isCode(lines[0]) || cellMatcher.isMarkdown(lines[0]))) {
@@ -138,7 +140,7 @@ export class CellHashProvider implements ICellHashProvider {
         return lines;
     }
 
-    private async generateHash(cell: NotebookCell, expectedCount: number): Promise<void> {
+    private async generateHash(cell: NotebookCell, expectedCount: number) {
         if (cell.metadata.interactive === undefined) {
             return;
         }
@@ -169,9 +171,10 @@ export class CellHashProvider implements ICellHashProvider {
             const runtimeLine = this.adjustRuntimeForDebugging(cell, stripped);
             const hashedCode = stripped.join('');
             const realCode = doc.getText(new Range(new Position(cellLine, 0), endLine.rangeIncludingLineBreak.end));
+            const hashValue = hashjs.sha1().update(hashedCode).digest('hex').substr(0, 12);
 
             const hash: IRangedCellHash = {
-                hash: hashjs.sha1().update(hashedCode).digest('hex').substr(0, 12),
+                hash: hashValue,
                 line: line ? line.lineNumber + 1 : 1,
                 endLine: endLine ? endLine.lineNumber + 1 : 1,
                 firstNonBlankLineIndex: firstNonBlankIndex + trueStartLine,
@@ -183,6 +186,7 @@ export class CellHashProvider implements ICellHashProvider {
                 trimmedRightCode: stripped.map((s) => s.replace(/[ \t\r]+\n$/g, '\n')).join(''),
                 realCode,
                 runtimeLine,
+                runtimeFile: this.getRuntimeFile(hashValue, expectedCount),
                 id: id,
                 timestamp: Date.now()
             };
@@ -232,6 +236,8 @@ export class CellHashProvider implements ICellHashProvider {
                 // Then fire our event
                 this.updateEventEmitter.fire();
             }
+
+            return hash;
         }
     }
 
@@ -241,6 +247,10 @@ export class CellHashProvider implements ICellHashProvider {
 
     public incExecutionCount(): void {
         this.executionCount += 1;
+    }
+
+    private getRuntimeFile(hash: string, executionCount: number) {
+        return `<ipython-input-${executionCount}-${hash}>`;
     }
 
     private onChangedDocument(e: TextDocumentChangeEvent) {
@@ -297,6 +307,11 @@ export class CellHashProvider implements ICellHashProvider {
             stripped[lastLinePos] = `${stripped[lastLinePos]}\n`;
         }
 
+        // We also don't send \r\n to jupyter. Remove from the stripped lines
+        for (let i = 0; i < stripped.length; i++) {
+            stripped[i] = stripped[i].replace(/\r\n/g, '\n');
+        }
+
         return { stripped, trueStartLine };
     }
 
@@ -344,10 +359,6 @@ export class CellHashProvider implements ICellHashProvider {
         ) {
             // Inject the breakpoint line
             source.splice(0, 0, 'breakpoint()\n');
-            // Store the modified source code in the metadata for retrieval in the kernelExecution.ts class.
-            // Longer term we should modify the kernelExecution codepath to understand InteractiveCells as a
-            // first class concept.
-            cell.metadata.interactive.modifiedSource = concatMultilineString(source);
 
             // Start on the second line
             return 2;

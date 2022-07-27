@@ -332,11 +332,15 @@ import { OSType } from '../../../client/common/utils/platform';
             when(fs.localDirectoryExists(anything())).thenResolve(true);
 
             const jupyterPaths = new JupyterPaths(instance(platformService), pathUtils, instance(envVarsProvider));
+            const memento = mock<Memento>();
+            when(memento.get(anything(), anything())).thenReturn(false);
+            when(memento.update(anything(), anything())).thenResolve();
             const nonPythonKernelSpecFinder = new LocalKnownPathKernelSpecFinder(
                 instance(fs),
                 instance(workspaceService),
                 jupyterPaths,
-                instance(extensionChecker)
+                instance(extensionChecker),
+                instance(memento)
             );
             const memeto = mock<Memento>();
             when(memeto.get('JUPYTER_GLOBAL_KERNELSPECS', anything())).thenReturn([]);
@@ -412,6 +416,95 @@ import { OSType } from '../../../client/common/utils/platform';
                 2,
                 'Missing both python3 kernelspecs'
             );
+        });
+        test('If two kernelspecs share the same interpreter, but have different envs both should be listed.', async function () {
+            if (isWindows) {
+                return this.skip();
+            }
+            const globalPython3spec: KernelSpec.ISpecModel = {
+                display_name: 'Python 3.7',
+                name: defaultPython3Name,
+                argv: ['/usr/bin/python37'],
+                language: 'python',
+                resources: {}
+            };
+            const python37Interpreter: PythonEnvironment = {
+                displayName: 'Python 3.7',
+                path: '/bin/python37',
+                sysPrefix: 'Python37',
+                version: {
+                    major: 3,
+                    minor: 7,
+                    raw: '3.8.0',
+                    build: ['0'],
+                    patch: 0,
+                    prerelease: ['0']
+                }
+            };
+            const python38Interpreter: PythonEnvironment = {
+                displayName: 'Python 3.8',
+                path: '/bin/python3',
+                sysPrefix: 'Python38',
+                version: {
+                    major: 3,
+                    minor: 8,
+                    raw: '3.8.10',
+                    build: ['0'],
+                    patch: 10,
+                    prerelease: ['0']
+                }
+            };
+            const python39Interpreter: PythonEnvironment = {
+                displayName: 'Python 3.9',
+                path: '/bin/python39',
+                sysPrefix: '/usr',
+                version: {
+                    major: 3,
+                    minor: 9,
+                    raw: '3.9.10',
+                    build: ['0'],
+                    patch: 10,
+                    prerelease: ['0']
+                }
+            };
+            when(fs.searchLocal(anything(), anything(), true)).thenCall(async (_p, dir, _d) => {
+                if (dir == '/usr/share/jupyter/kernels') {
+                    return ['globalPython3.json'];
+                }
+                return [];
+            });
+            when(fs.readLocalFile(anything())).thenCall((f) => {
+                if (f.endsWith('globalPython3.json')) {
+                    return Promise.resolve(JSON.stringify(globalPython3spec));
+                }
+                throw new Error('Unavailable file');
+            });
+            when(extensionChecker.isPythonExtensionInstalled).thenReturn(true);
+            when(interpreterService.getInterpreters(anything())).thenResolve([
+                python38Interpreter,
+                python37Interpreter,
+                python39Interpreter
+            ]);
+            const kernels = await kernelFinder.listKernels(undefined);
+            // We should have just 3 interpreters.
+            // We have a global kernel spec that points to python 37, hence no need to display kernelspec.
+            assert.lengthOf(kernels, 3, 'Incorrect number of kernels');
+
+            // Ensure kernelspec in the kernel points to the right interpreter.
+            kernels.forEach((kernel) => {
+                assert.strictEqual(
+                    kernel.interpreter?.path,
+                    kernel.kernelSpec?.interpreterPath,
+                    `kernelSpec.interpreterPath is not right for ${kernel.interpreter?.displayName}`
+                );
+                if (kernel.kernelSpec?.path !== 'python') {
+                    assert.strictEqual(
+                        kernel.interpreter?.path,
+                        kernel.kernelSpec?.path,
+                        `kernelSpec.path is not right for ${kernel.interpreter?.displayName}`
+                    );
+                }
+            });
         });
         // Previously tests passed because the activeInterpreter in the tests was the first interpreter form the list.
         [

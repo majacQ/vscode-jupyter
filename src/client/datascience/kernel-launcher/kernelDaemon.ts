@@ -6,11 +6,12 @@
 import { ChildProcess } from 'child_process';
 import { Subject } from 'rxjs/Subject';
 import { MessageConnection, NotificationType, RequestType, RequestType0 } from 'vscode-jsonrpc';
-import { traceInfo, traceWarning } from '../../common/logger';
+import { traceInfo } from '../../common/logger';
 import { IPlatformService } from '../../common/platform/types';
 import { BasePythonDaemon, ExecResponse } from '../../common/process/baseDaemon';
 import { IPythonExecutionService, ObservableExecutionResult, Output, SpawnOptions } from '../../common/process/types';
-import { IPythonKernelDaemon, PythonKernelDiedError } from './types';
+import { PythonKernelDiedError } from '../errors/pythonKernelDiedError';
+import { IPythonKernelDaemon } from './types';
 
 export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKernelDaemon {
     private started?: boolean;
@@ -89,7 +90,7 @@ export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKerne
             // This is why when we run `execModule` in the Kernel daemon, it finishes (comes back) quickly.
             // However in reality it is running in the background.
             // See `m_exec_module_observable` in `kernel_launcher_daemon.py`.
-            traceInfo(`Starting kernel from scratch with options ${JSON.stringify(options)}`);
+            traceInfo('Starting kernel from scratch');
             await this.execModule(moduleName, args, options);
         }
 
@@ -127,13 +128,7 @@ export class PythonKernelDaemon extends BasePythonDaemon implements IPythonKerne
         this.outputObservable.subscribe(
             (out) => {
                 if (out.source === 'stderr') {
-                    // Don't call this.subject.error, as that can only be called once (hence can only be handled once).
-                    // Instead log this error & pass this only when the kernel dies.
                     stdErr += out.out;
-                    // If we have requested for kernel to be killed, don't raise kernel died error.
-                    if (!this.killed) {
-                        traceWarning(`Kernel ${this.proc.pid} as possibly died, StdErr from Kernel Process ${out.out}`);
-                    }
                 }
                 this.subject.next(out);
             },
