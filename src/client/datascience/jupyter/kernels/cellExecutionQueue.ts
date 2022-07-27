@@ -1,24 +1,25 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import { NotebookCell, NotebookCellRunState } from 'vscode';
+import { Disposable, EventEmitter, NotebookCell } from 'vscode';
 import { traceError, traceInfo } from '../../../common/logger';
 import { noop } from '../../../common/utils/misc';
-import { Telemetry } from '../../constants';
-import { sendKernelTelemetryEvent } from '../../telemetry/telemetry';
 import { traceCellMessage } from '../../notebook/helpers/helpers';
-import { INotebook } from '../../types';
+import { IJupyterSession } from '../../types';
 import { CellExecution, CellExecutionFactory } from './cellExecution';
+import { KernelConnectionMetadata, NotebookCellRunState } from './types';
 
 /**
  * A queue responsible for execution of cells.
  * If this has not completed execution of the cells queued, we can continue to add more cells to this job.
  * All cells queued using `queueCell` are added to the queue and processed in order they were added/queued.
  */
-export class CellExecutionQueue {
+export class CellExecutionQueue implements Disposable {
     private readonly queueOfCellsToExecute: CellExecution[] = [];
     private cancelledOrCompletedWithErrors = false;
     private startedRunningCells = false;
+    private readonly _onPreExecute = new EventEmitter<NotebookCell>();
+    private disposables: Disposable[] = [];
     /**
      * Whether all cells have completed processing or cancelled, or some completed & others cancelled.
      */
@@ -33,21 +34,29 @@ export class CellExecutionQueue {
         return this.cancelledOrCompletedWithErrors;
     }
     constructor(
-        private readonly notebookPromise: Promise<INotebook>,
+        private readonly session: Promise<IJupyterSession>,
         private readonly executionFactory: CellExecutionFactory,
-        private readonly isPythonKernelConnection: boolean
+        readonly metadata: Readonly<KernelConnectionMetadata>
     ) {}
+
+    public dispose() {
+        this.disposables.forEach((d) => d.dispose());
+    }
+
+    public get onPreExecute() {
+        return this._onPreExecute.event;
+    }
     /**
      * Queue the cell for execution & start processing it immediately.
      */
-    public queueCell(cell: NotebookCell) {
-        sendKernelTelemetryEvent(cell.document.uri, Telemetry.ExecuteCell);
+    public queueCell(cell: NotebookCell): void {
         const existingCellExecution = this.queueOfCellsToExecute.find((item) => item.cell === cell);
         if (existingCellExecution) {
             traceCellMessage(cell, 'Use existing cell execution');
-            return existingCellExecution;
+            return;
         }
-        const cellExecution = this.executionFactory.create(cell, this.isPythonKernelConnection);
+        const cellExecution = this.executionFactory.create(cell, this.metadata);
+        cellExecution.preExecute((c) => this._onPreExecute.fire(c), this, this.disposables);
         this.queueOfCellsToExecute.push(cellExecution);
 
         traceCellMessage(cell, 'User queued cell for execution');
@@ -73,13 +82,13 @@ export class CellExecutionQueue {
      * If cells are cancelled, they are not processed, & that too counts as completion.
      * If no cells are provided, then wait on all cells in the current queue.
      */
-    public async waitForCompletion(cells?: NotebookCell[]): Promise<void> {
+    public async waitForCompletion(cells?: NotebookCell[]): Promise<NotebookCellRunState[]> {
         const cellsToCheck =
             Array.isArray(cells) && cells.length > 0
                 ? this.queueOfCellsToExecute.filter((item) => cells.includes(item.cell))
                 : this.queueOfCellsToExecute;
 
-        await Promise.all(cellsToCheck.map((cell) => cell.result));
+        return Promise.all(cellsToCheck.map((cell) => cell.result));
     }
     private startExecutingCells() {
         if (!this.startedRunningCells) {
@@ -103,7 +112,7 @@ export class CellExecutionQueue {
         }
     }
     private async executeQueuedCells() {
-        const notebook = await this.notebookPromise;
+        const kernelConnection = await this.session;
         this.queueOfCellsToExecute.forEach((exec) => traceCellMessage(exec.cell, 'Ready to execute'));
         while (this.queueOfCellsToExecute.length) {
             // Take the first item from the queue, this way we maintain order of cell executions.
@@ -114,7 +123,7 @@ export class CellExecutionQueue {
 
             let executionResult: NotebookCellRunState | undefined;
             try {
-                await cellToExecute.start(notebook);
+                await cellToExecute.start(kernelConnection);
                 executionResult = await cellToExecute.result;
             } finally {
                 // Once the cell has completed execution, remove it from the queue.
@@ -129,6 +138,13 @@ export class CellExecutionQueue {
             if (this.cancelledOrCompletedWithErrors || executionResult === NotebookCellRunState.Error) {
                 this.cancelledOrCompletedWithErrors = true;
                 traceInfo(`Cancel all remaining cells ${this.cancelledOrCompletedWithErrors} || ${executionResult}`);
+                await this.cancel();
+                break;
+            }
+            // If the kernel is dead, then no point trying the rest.
+            if (kernelConnection.status === 'dead' || kernelConnection.status === 'terminating') {
+                this.cancelledOrCompletedWithErrors = true;
+                traceInfo(`Cancel all remaining cells due to dead kernel`);
                 await this.cancel();
                 break;
             }

@@ -5,6 +5,8 @@
 import { IDisposable } from '../../common/types';
 import { SharedMessages } from '../messages';
 import { Event } from 'vscode';
+import { SliceOperationSource } from '../../telemetry/constants';
+import { IKernel } from '../jupyter/kernels/types';
 
 export const CellFetchAllLimit = 100000;
 export const CellFetchSizeFirst = 100000;
@@ -27,6 +29,8 @@ export namespace DataViewerMessages {
     export const GetRowsResponse = 'get_rows_response';
     export const CompletedData = 'complete';
     export const GetSliceRequest = 'get_slice_request';
+    export const RefreshDataViewer = 'refresh_data_viewer';
+    export const SliceEnablementStateChanged = 'slice_enablement_state_changed';
 }
 
 export interface IGetRowsRequest {
@@ -43,19 +47,22 @@ export interface IGetRowsResponse {
 
 export interface IGetSliceRequest {
     slice: string | undefined;
+    source: SliceOperationSource;
 }
 
 // Map all messages to specific payloads
 export type IDataViewerMapping = {
     [DataViewerMessages.Started]: never | undefined;
     [DataViewerMessages.UpdateSettings]: string;
-    [DataViewerMessages.InitializeData]: IDataFrameInfo & { isSliceDataEnabled: boolean };
+    [DataViewerMessages.InitializeData]: IDataFrameInfo;
     [DataViewerMessages.GetAllRowsRequest]: never | undefined | string;
     [DataViewerMessages.GetAllRowsResponse]: IRowsResponse;
     [DataViewerMessages.GetRowsRequest]: IGetRowsRequest;
     [DataViewerMessages.GetRowsResponse]: IGetRowsResponse;
     [DataViewerMessages.CompletedData]: never | undefined;
     [DataViewerMessages.GetSliceRequest]: IGetSliceRequest;
+    [DataViewerMessages.RefreshDataViewer]: never | undefined;
+    [DataViewerMessages.SliceEnablementStateChanged]: { newState: boolean };
 };
 
 export interface IDataFrameInfo {
@@ -95,11 +102,14 @@ export type IRowsResponse = any[];
 export const IDataViewerFactory = Symbol('IDataViewerFactory');
 export interface IDataViewerFactory {
     create(dataProvider: IDataViewerDataProvider, title: string): Promise<IDataViewer>;
+    readonly activeViewer: IDataViewer | undefined;
 }
 
 export const IDataViewer = Symbol('IDataViewer');
 export interface IDataViewer extends IDisposable {
     readonly active: boolean;
+    readonly kernel?: IKernel | undefined;
+    readonly title: string;
     readonly onDidDisposeDataViewer: Event<IDataViewer>;
     readonly onDidChangeDataViewerViewState: Event<void>;
     showData(dataProvider: IDataViewerDataProvider, title: string): Promise<void>;

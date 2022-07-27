@@ -1,11 +1,10 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 'use strict';
-import type { nbformat } from '@jupyterlab/coreutils';
+import type * as nbformat from '@jupyterlab/nbformat';
 import { inject, injectable } from 'inversify';
 import * as os from 'os';
 import * as path from 'path';
-import * as uuid from 'uuid/v4';
 
 import { Uri } from 'vscode';
 import { concatMultilineString } from '../../../datascience-ui/common';
@@ -18,15 +17,13 @@ import * as localize from '../../common/utils/localize';
 import { noop } from '../../common/utils/misc';
 import { CellMatcher } from '../cellMatcher';
 import { pruneCell } from '../common';
-import { CodeSnippets, Identifiers } from '../constants';
+import { CodeSnippets, defaultNotebookFormat } from '../constants';
 import {
-    CellState,
     ICell,
     IDataScienceErrorHandler,
     IJupyterExecution,
     INotebookEditorProvider,
-    INotebookExporter,
-    ITrustService
+    INotebookExporter
 } from '../types';
 
 @injectable()
@@ -39,8 +36,7 @@ export class JupyterExporter implements INotebookExporter {
         @inject(IPlatformService) private readonly platform: IPlatformService,
         @inject(IApplicationShell) private readonly applicationShell: IApplicationShell,
         @inject(INotebookEditorProvider) protected ipynbProvider: INotebookEditorProvider,
-        @inject(IDataScienceErrorHandler) protected errorHandler: IDataScienceErrorHandler,
-        @inject(ITrustService) private readonly trustService: ITrustService
+        @inject(IDataScienceErrorHandler) protected errorHandler: IDataScienceErrorHandler
     ) {}
 
     public dispose() {
@@ -59,7 +55,6 @@ export class JupyterExporter implements INotebookExporter {
         try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const contents = JSON.stringify(notebook);
-            await this.trustService.trustNotebook(Uri.file(file), contents);
             await this.fileSystem.writeFile(Uri.file(file), contents);
             if (!showOpenPrompt) {
                 return;
@@ -73,12 +68,16 @@ export class JupyterExporter implements INotebookExporter {
                             await this.ipynbProvider.open(Uri.file(file));
                         }
                     } catch (e) {
-                        await this.errorHandler.handleError(e);
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        await this.errorHandler.handleError(e as any);
                     }
                 });
         } catch (exc) {
             traceError('Error in exporting notebook file');
-            void this.applicationShell.showInformationMessage(localize.DataScience.exportDialogFailed().format(exc));
+            void this.applicationShell.showInformationMessage(
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                localize.DataScience.exportDialogFailed().format(exc as any)
+            );
         }
     }
     public async translateToNotebook(
@@ -94,7 +93,7 @@ export class JupyterExporter implements INotebookExporter {
         const pythonNumber = await this.extractPythonMainVersion();
 
         // Use this to build our metadata object
-        const metadata: nbformat.INotebookMetadata = {
+        const metadata = {
             language_info: {
                 codemirror_mode: {
                     name: 'ipython',
@@ -107,7 +106,7 @@ export class JupyterExporter implements INotebookExporter {
                 pygments_lexer: `ipython${pythonNumber}`,
                 version: pythonNumber
             },
-            orig_nbformat: 2,
+            orig_nbformat: defaultNotebookFormat.major,
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             kernelspec: kernelSpec as any
         };
@@ -118,8 +117,8 @@ export class JupyterExporter implements INotebookExporter {
         // Combine this into a JSON object
         return {
             cells: this.pruneCells(cells, matcher),
-            nbformat: 4,
-            nbformat_minor: 2,
+            nbformat: defaultNotebookFormat.major,
+            nbformat_minor: defaultNotebookFormat.minor,
             metadata: metadata
         };
     }
@@ -136,11 +135,7 @@ export class JupyterExporter implements INotebookExporter {
             );
 
             const cell: ICell = {
-                data: createCodeCell(exportChangeDirectory),
-                id: uuid(),
-                file: Identifiers.EmptyFileName,
-                line: 0,
-                state: CellState.finished
+                data: createCodeCell(exportChangeDirectory)
             };
 
             return [cell, ...cells];
@@ -155,7 +150,7 @@ export class JupyterExporter implements INotebookExporter {
             const filename = cell.file;
 
             // First check that this is an absolute file that exists (we add in temp files to run system cell)
-            if (path.isAbsolute(filename) && (await this.fileSystem.localFileExists(filename))) {
+            if (filename && path.isAbsolute(filename) && (await this.fileSystem.localFileExists(filename))) {
                 // We've already check that workspace folders above
                 for (const folder of this.workspaceService.workspaceFolders!) {
                     if (filename.toLowerCase().startsWith(folder.uri.fsPath.toLowerCase())) {
@@ -208,7 +203,7 @@ export class JupyterExporter implements INotebookExporter {
 
     private pruneCells = (cells: ICell[], cellMatcher: CellMatcher): nbformat.IBaseCell[] => {
         // First filter out sys info cells. Jupyter doesn't understand these
-        const filtered = cells.filter((c) => c.data.cell_type !== 'messages');
+        const filtered = cells;
 
         // Then prune each cell down to just the cell data.
         return filtered.map((c) => this.pruneCell(c, cellMatcher));

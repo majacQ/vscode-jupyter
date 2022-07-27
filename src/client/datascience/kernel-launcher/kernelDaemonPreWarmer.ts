@@ -4,27 +4,19 @@
 'use strict';
 
 import { inject, injectable } from 'inversify';
-import { NotebookDocument, NotebookCell } from 'vscode';
+import { NotebookDocument } from 'vscode';
 import { IPythonExtensionChecker } from '../../api/types';
 import { IVSCodeNotebook } from '../../common/application/types';
-import { PYTHON_LANGUAGE } from '../../common/constants';
 import '../../common/extensions';
 import { IConfigurationService, IDisposableRegistry, Resource } from '../../common/types';
 import { swallowExceptions } from '../../common/utils/decorators';
-import { isJupyterKernel } from '../notebook/helpers/helpers';
-import {
-    IInteractiveWindowProvider,
-    INotebookCreationTracker,
-    INotebookEditor,
-    INotebookEditorProvider,
-    IRawNotebookSupportedService
-} from '../types';
+import { isJupyterNotebook } from '../notebook/helpers/helpers';
+import { IInteractiveWindowProvider, INotebookCreationTracker, IRawNotebookSupportedService } from '../types';
 import { KernelDaemonPool } from './kernelDaemonPool';
 
 @injectable()
 export class KernelDaemonPreWarmer {
     constructor(
-        @inject(INotebookEditorProvider) private readonly notebookEditorProvider: INotebookEditorProvider,
         @inject(IInteractiveWindowProvider) private interactiveProvider: IInteractiveWindowProvider,
         @inject(IDisposableRegistry) private readonly disposables: IDisposableRegistry,
         @inject(INotebookCreationTracker)
@@ -40,28 +32,33 @@ export class KernelDaemonPreWarmer {
         // If not, don't bother with prewarming
         // Also respect the disable autostart setting to not do any prewarming for the user
         if (
-            !(await this.rawNotebookSupported.supported()) ||
+            !this.rawNotebookSupported.isSupported ||
             this.configService.getSettings().disableJupyterAutoStart ||
             !this.extensionChecker.isPythonExtensionInstalled
         ) {
             return;
         }
 
-        this.disposables.push(this.notebookEditorProvider.onDidOpenNotebookEditor(this.openNotebookEditor, this));
         this.disposables.push(
             this.interactiveProvider.onDidChangeActiveInteractiveWindow(this.preWarmKernelDaemonPool, this)
         );
 
         this.disposables.push(this.vscodeNotebook.onDidOpenNotebookDocument(this.onDidOpenNotebookDocument, this));
 
-        if (this.notebookEditorProvider.editors.length > 0 || this.interactiveProvider.windows.length > 0) {
+        if (
+            this.extensionChecker.isPythonExtensionActive &&
+            this.vscodeNotebook.notebookDocuments.some((nb) => isJupyterNotebook(nb))
+        ) {
             await this.preWarmKernelDaemonPool();
         }
-        await this.preWarmDaemonPoolIfNecesary();
+        await this.preWarmDaemonPoolIfNecessary();
     }
-    private async preWarmDaemonPoolIfNecesary() {
+    private async preWarmDaemonPoolIfNecessary() {
         // This is only for python, so prewarm just if we've seen python recently in this workspace
-        if (this.shouldPreWarmDaemonPool(this.usageTracker.lastPythonNotebookCreated)) {
+        if (
+            this.shouldPreWarmDaemonPool(this.usageTracker.lastPythonNotebookCreated) &&
+            this.extensionChecker.isPythonExtensionActive
+        ) {
             await this.preWarmKernelDaemonPool();
         }
     }
@@ -70,24 +67,24 @@ export class KernelDaemonPreWarmer {
         await this.kernelDaemonPool.preWarmKernelDaemons();
     }
 
-    // Only handle non-native editors via this code path
-    private async openNotebookEditor(editor: INotebookEditor) {
-        if (editor.type !== 'native') {
-            await this.preWarmKernelDaemonPool();
-        }
-    }
-
     // Handle opening of native documents
-    private async onDidOpenNotebookDocument(doc: NotebookDocument): Promise<void> {
-        const kernel = this.vscodeNotebook.notebookEditors.find((item) => item.document === doc)?.kernel;
-        if (
-            isJupyterKernel(kernel) ||
-            doc.cells.some((cell: NotebookCell) => {
-                return cell.language === PYTHON_LANGUAGE;
-            })
-        ) {
-            await this.preWarmKernelDaemonPool();
-        }
+    private async onDidOpenNotebookDocument(_doc: NotebookDocument): Promise<void> {
+        // // It could be anything, lets not make any assumptions.
+        // if (isUntitledFile(doc.uri) || !isJupyterNotebook(doc)) {
+        //     return;
+        // }
+        // const kernelConnection = this.controllerManager.getSelectedNotebookController(doc)?.connection;
+        // const isPythonKernel = kernelConnection ? isPythonKernelConnection(kernelConnection) : false;
+        // const notebookMetadata = isPythonNotebook(getNotebookMetadata(doc));
+        // if (
+        //     isPythonKernel ||
+        //     notebookMetadata ||
+        //     doc.getCells().some((cell: NotebookCell) => {
+        //         return cell.document.languageId === PYTHON_LANGUAGE;
+        //     })
+        // ) {
+        //     await this.preWarmKernelDaemonPool();
+        // }
     }
 
     private shouldPreWarmDaemonPool(lastTime?: Date) {

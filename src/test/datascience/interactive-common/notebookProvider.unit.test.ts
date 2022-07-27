@@ -7,8 +7,9 @@ import * as vscode from 'vscode';
 import { PythonExtensionChecker } from '../../../client/api/pythonApi';
 import { IWorkspaceService } from '../../../client/common/application/types';
 import { ConfigurationService } from '../../../client/common/configuration/service';
-import { IDisposableRegistry, IJupyterSettings } from '../../../client/common/types';
+import { IJupyterSettings } from '../../../client/common/types';
 import { NotebookProvider } from '../../../client/datascience/interactive-common/notebookProvider';
+import { KernelConnectionMetadata } from '../../../client/datascience/jupyter/kernels/types';
 import { IJupyterNotebookProvider, INotebook, IRawNotebookProvider } from '../../../client/datascience/types';
 
 function Uri(filename: string): vscode.Uri {
@@ -28,13 +29,11 @@ function createTypeMoq<T>(tag: string): typemoq.IMock<T> {
 /* eslint-disable  */
 suite('DataScience - NotebookProvider', () => {
     let notebookProvider: NotebookProvider;
-    let disposableRegistry: IDisposableRegistry;
     let jupyterNotebookProvider: IJupyterNotebookProvider;
     let rawNotebookProvider: IRawNotebookProvider;
     let dataScienceSettings: IJupyterSettings;
 
     setup(() => {
-        disposableRegistry = mock<IDisposableRegistry>();
         jupyterNotebookProvider = mock<IJupyterNotebookProvider>();
         rawNotebookProvider = mock<IRawNotebookProvider>();
         const workspaceService = mock<IWorkspaceService>();
@@ -45,13 +44,12 @@ suite('DataScience - NotebookProvider', () => {
         when(workspaceService.hasWorkspaceFolders).thenReturn(false);
         when(dataScienceSettings.jupyterServerType).thenReturn('local');
         when(dataScienceSettings.useDefaultConfigForJupyter).thenReturn(true);
-        when(rawNotebookProvider.supported).thenReturn(() => Promise.resolve(false));
+        when(rawNotebookProvider.isSupported).thenReturn(false);
         const extensionChecker = mock(PythonExtensionChecker);
         when(extensionChecker.isPythonExtensionInstalled).thenReturn(true);
         when(configService.getSettings(anything())).thenReturn(instance(dataScienceSettings) as any);
 
         notebookProvider = new NotebookProvider(
-            instance(disposableRegistry),
             instance(rawNotebookProvider),
             instance(jupyterNotebookProvider),
             instance(workspaceService),
@@ -60,45 +58,39 @@ suite('DataScience - NotebookProvider', () => {
         );
     });
 
-    test('NotebookProvider getOrCreateNotebook jupyter provider has notebook already', async () => {
-        const notebookMock = createTypeMoq<INotebook>('jupyter notebook');
-        when(jupyterNotebookProvider.getNotebook(anything())).thenResolve(notebookMock.object);
-
-        const notebook = await notebookProvider.getOrCreateNotebook({
-            identity: Uri('C:\\\\foo.py'),
-            resource: Uri('C:\\\\foo.py')
-        });
-        expect(notebook).to.not.equal(undefined, 'Provider should return a notebook');
-    });
-
     test('NotebookProvider getOrCreateNotebook jupyter provider does not have notebook already', async () => {
         const notebookMock = createTypeMoq<INotebook>('jupyter notebook');
-        when(jupyterNotebookProvider.getNotebook(anything())).thenResolve(undefined);
         when(jupyterNotebookProvider.createNotebook(anything())).thenResolve(notebookMock.object);
         when(jupyterNotebookProvider.connect(anything())).thenResolve({} as any);
+        const doc = mock<vscode.NotebookDocument>();
+        when(doc.uri).thenReturn(Uri('C:\\\\foo.py'));
 
-        const notebook = await notebookProvider.getOrCreateNotebook({
-            identity: Uri('C:\\\\foo.py'),
-            resource: Uri('C:\\\\foo.py')
+        const notebook = await notebookProvider.createNotebook({
+            document: instance(doc),
+            resource: Uri('C:\\\\foo.py'),
+            kernelConnection: instance(mock<KernelConnectionMetadata>())
         });
         expect(notebook).to.not.equal(undefined, 'Provider should return a notebook');
     });
 
     test('NotebookProvider getOrCreateNotebook second request should return the notebook already cached', async () => {
         const notebookMock = createTypeMoq<INotebook>('jupyter notebook');
-        when(jupyterNotebookProvider.getNotebook(anything())).thenResolve(undefined);
         when(jupyterNotebookProvider.createNotebook(anything())).thenResolve(notebookMock.object);
         when(jupyterNotebookProvider.connect(anything())).thenResolve({} as any);
+        const doc = mock<vscode.NotebookDocument>();
+        when(doc.uri).thenReturn(Uri('C:\\\\foo.py'));
 
-        const notebook = await notebookProvider.getOrCreateNotebook({
-            identity: Uri('C:\\\\foo.py'),
-            resource: Uri('C:\\\\foo.py')
+        const notebook = await notebookProvider.createNotebook({
+            document: instance(doc),
+            resource: Uri('C:\\\\foo.py'),
+            kernelConnection: instance(mock<KernelConnectionMetadata>())
         });
         expect(notebook).to.not.equal(undefined, 'Server should return a notebook');
 
-        const notebook2 = await notebookProvider.getOrCreateNotebook({
-            identity: Uri('C:\\\\foo.py'),
-            resource: Uri('C:\\\\foo.py')
+        const notebook2 = await notebookProvider.createNotebook({
+            document: instance(doc),
+            resource: Uri('C:\\\\foo.py'),
+            kernelConnection: instance(mock<KernelConnectionMetadata>())
         });
         expect(notebook2).to.equal(notebook);
     });

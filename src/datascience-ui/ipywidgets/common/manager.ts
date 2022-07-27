@@ -3,11 +3,11 @@
 
 'use strict';
 
-import '@jupyter-widgets/controls/css/labvariables.css';
+import '../../../ipywidgets/node_modules/@jupyter-widgets/controls/css/labvariables.css';
 
 import type { Kernel, KernelMessage } from '@jupyterlab/services';
-import type { nbformat } from '@jupyterlab/services/node_modules/@jupyterlab/coreutils';
-import { Widget } from '@phosphor/widgets';
+import type * as nbformat from '@jupyterlab/nbformat';
+import { Widget } from '@lumino/widgets';
 import * as fastDeepEqual from 'fast-deep-equal';
 import 'rxjs/add/operator/concatMap';
 import { Observable } from 'rxjs/Observable';
@@ -20,6 +20,7 @@ import {
 } from '../../../client/datascience/interactive-common/interactiveWindowTypes';
 import { WIDGET_MIMETYPE } from '../../../client/datascience/ipywidgets/constants';
 import { KernelSocketOptions } from '../../../client/datascience/types';
+import { logMessage } from '../../react-common/logger';
 import { IMessageHandler, PostOffice } from '../../react-common/postOffice';
 import { create as createKernel } from './kernel';
 import { IIPyWidgetManager, IJupyterLabWidgetManager, IJupyterLabWidgetManagerCtor, ScriptLoader } from './types';
@@ -32,7 +33,7 @@ export class WidgetManager implements IIPyWidgetManager, IMessageHandler {
     }
     private static _instance = new ReplaySubject<WidgetManager | undefined>();
     private manager?: IJupyterLabWidgetManager;
-    private proxyKernel?: Kernel.IKernel;
+    private proxyKernel?: Kernel.IKernelConnection;
     private options?: KernelSocketOptions;
     private pendingMessages: { message: string; payload: any }[] = [];
     /**
@@ -65,8 +66,13 @@ export class WidgetManager implements IIPyWidgetManager, IMessageHandler {
     }
     public handleMessage(message: string, payload?: any) {
         if (message === IPyWidgetMessages.IPyWidgets_kernelOptions) {
+            logMessage('Received IPyWidgetMessages.IPyWidgets_kernelOptions');
             this.initializeKernelAndWidgetManager(payload);
+        } else if (message === IPyWidgetMessages.IPyWidgets_IsReadyRequest) {
+            logMessage('Received IPyWidgetMessages.IPyWidgets_IsReadyRequest');
+            this.postOffice.sendMessage<IInteractiveWindowMapping>(IPyWidgetMessages.IPyWidgets_Ready);
         } else if (message === IPyWidgetMessages.IPyWidgets_onRestartKernel) {
+            logMessage('Received IPyWidgetMessages.IPyWidgets_onRestartKernel');
             // Kernel was restarted.
             this.manager?.dispose(); // NOSONAR
             this.manager = undefined;
@@ -74,6 +80,7 @@ export class WidgetManager implements IIPyWidgetManager, IMessageHandler {
             this.proxyKernel = undefined;
             WidgetManager._instance.next(undefined);
         } else if (!this.proxyKernel) {
+            logMessage(`Received some pending message ${message}`);
             this.pendingMessages.push({ message, payload });
         }
         return true;

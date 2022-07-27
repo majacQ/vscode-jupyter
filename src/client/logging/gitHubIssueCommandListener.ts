@@ -1,8 +1,6 @@
-import { Octokit } from '@octokit/rest';
 import { inject, injectable } from 'inversify';
 import * as path from 'path';
 import {
-    authentication,
     Diagnostic,
     DiagnosticCollection,
     env,
@@ -22,7 +20,7 @@ import { IFileSystem, IPlatformService } from '../common/platform/types';
 import { IDisposableRegistry, IExtensionContext, IPathUtils } from '../common/types';
 import { GitHubIssue } from '../common/utils/localize';
 import { Commands } from '../datascience/constants';
-import { IDataScienceCommandListener, IInteractiveWindowProvider, INotebookProvider } from '../datascience/types';
+import { IDataScienceCommandListener, IInteractiveWindowProvider } from '../datascience/types';
 import { IInterpreterService } from '../interpreter/contracts';
 
 @injectable()
@@ -39,12 +37,11 @@ export class GitHubIssueCommandListener implements IDataScienceCommandListener {
         @inject(IApplicationEnvironment) private applicationEnvironment: IApplicationEnvironment,
         @inject(IPlatformService) private platformService: IPlatformService,
         @inject(IDisposableRegistry) private readonly disposableRegistry: IDisposableRegistry,
-        @inject(INotebookProvider) private notebookProvider: INotebookProvider,
         @inject(IInterpreterService) private interpreterService: IInterpreterService,
         @inject(IExtensionContext) private extensionContext: IExtensionContext,
         @inject(IInteractiveWindowProvider) private interactiveWindowProvider: IInteractiveWindowProvider
     ) {
-        this.logfilePath = path.join(this.extensionContext.globalStoragePath, 'log.txt');
+        this.logfilePath = path.join(this.extensionContext.globalStorageUri.fsPath, 'log.txt');
         this.diagnosticCollection = languages.createDiagnosticCollection(MARKDOWN_LANGUAGE);
     }
     public register(commandManager: ICommandManager): void {
@@ -70,8 +67,6 @@ export class GitHubIssueCommandListener implements IDataScienceCommandListener {
 # Your Jupyter environment
 Active Python interpreter: ${(await this.interpreterService.getActiveInterpreter(undefined))?.displayName}
 Number of interactive windows: ${this.interactiveWindowProvider?.windows?.length}
-Number of Jupyter notebooks: ${this.notebookProvider?.activeNotebooks?.length}
-Jupyter notebook type: ${this.notebookProvider?.type}
 Extension version: ${this.applicationEnvironment?.packageJson?.version}
 VS Code version: ${this.applicationEnvironment?.vscodeVersion}
 OS: ${this.platformService.osType} ${(await this.platformService?.getVersion())?.version}
@@ -143,26 +138,26 @@ ${'```'}
         return diagnostics;
     }
 
-    private async submitForUser(body: string) {
-        const title = await window.showInputBox({
-            ignoreFocusOut: true,
-            prompt: GitHubIssue.askForIssueTitle(),
-            placeHolder: GitHubIssue.titlePlaceholder()
-        });
-        const authSession = await authentication.getSession('github', ['repo'], { createIfNone: true });
-        if (authSession) {
-            const octokit = new Octokit({ auth: authSession.accessToken });
-            const response = await octokit.issues.create({
-                owner: 'microsoft',
-                repo: 'vscode-jupyter',
-                title: title ? title : 'Bug report',
-                body
-            });
-            if (response?.data?.html_url) {
-                await env.openExternal(Uri.parse(response.data.html_url));
-                this.closeIssueEditorOnSuccess();
-            }
-        }
+    private async submitForUser(_body: string) {
+        // const title = await window.showInputBox({
+        //     ignoreFocusOut: true,
+        //     prompt: GitHubIssue.askForIssueTitle(),
+        //     placeHolder: GitHubIssue.titlePlaceholder()
+        // });
+        // const authSession = await authentication.getSession('github', ['repo'], { createIfNone: true });
+        // if (authSession) {
+        //     const octokit = new Octokit({ auth: authSession.accessToken });
+        //     const response = await octokit.issues.create({
+        //         owner: 'microsoft',
+        //         repo: 'vscode-jupyter',
+        //         title: title ? title : 'Bug report',
+        //         body
+        //     });
+        //     if (response?.data?.html_url) {
+        //         await env.openExternal(Uri.parse(response.data.html_url));
+        //         this.closeIssueEditorOnSuccess();
+        //     }
+        // }
     }
 
     private closeIssueEditorOnSuccess() {

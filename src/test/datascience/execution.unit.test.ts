@@ -16,7 +16,6 @@ import { ApplicationShell } from '../../client/common/application/applicationShe
 import { IApplicationShell, IWorkspaceService } from '../../client/common/application/types';
 import { WorkspaceService } from '../../client/common/application/workspace';
 import { ConfigurationService } from '../../client/common/configuration/service';
-import { PYTHON_LANGUAGE } from '../../client/common/constants';
 import { PersistentState, PersistentStateFactory } from '../../client/common/persistentState';
 import { FileSystem } from '../../client/common/platform/fileSystem';
 import { IFileSystem } from '../../client/common/platform/types';
@@ -44,10 +43,12 @@ import { JupyterInterpreterDependencyService } from '../../client/datascience/ju
 import { JupyterInterpreterOldCacheStateStore } from '../../client/datascience/jupyter/interpreter/jupyterInterpreterOldCacheStateStore';
 import { JupyterInterpreterService } from '../../client/datascience/jupyter/interpreter/jupyterInterpreterService';
 import { JupyterInterpreterSubCommandExecutionService } from '../../client/datascience/jupyter/interpreter/jupyterInterpreterSubCommandExecutionService';
-import { JupyterExecutionFactory } from '../../client/datascience/jupyter/jupyterExecutionFactory';
-import { KernelSelector } from '../../client/datascience/jupyter/kernels/kernelSelector';
+import { getKernelId } from '../../client/datascience/jupyter/kernels/helpers';
+import { LocalKernelConnectionMetadata } from '../../client/datascience/jupyter/kernels/types';
+import { HostJupyterExecution } from '../../client/datascience/jupyter/liveshare/hostJupyterExecution';
 import { NotebookStarter } from '../../client/datascience/jupyter/notebookStarter';
-import { LiveShareApi } from '../../client/datascience/liveshare/liveshare';
+import { LocalKernelFinder } from '../../client/datascience/kernel-launcher/localKernelFinder';
+import { ILocalKernelFinder } from '../../client/datascience/kernel-launcher/types';
 import {
     IJupyterKernelSpec,
     IJupyterSubCommandExecutionService,
@@ -57,6 +58,7 @@ import { IEnvironmentActivationService } from '../../client/interpreter/activati
 import { IInterpreterService } from '../../client/interpreter/contracts';
 import { ServiceContainer } from '../../client/ioc/container';
 import { PythonEnvironment } from '../../client/pythonEnvironments/info';
+import { areInterpreterPathsSame } from '../../client/pythonEnvironments/info/interpreter';
 import { getOSType, OSType } from '../common';
 import { noop } from '../core';
 import { MockOutputChannel } from '../mockClasses';
@@ -88,7 +90,6 @@ suite('Jupyter Execution', async () => {
     const interpreterService = mock<IInterpreterService>();
     const jupyterOutputChannel = new MockOutputChannel('');
     const executionFactory = mock(PythonExecutionFactory);
-    const liveShare = mock(LiveShareApi);
     const configService = mock(ConfigurationService);
     const application = mock(ApplicationShell);
     const processServiceFactory = mock(ProcessServiceFactory);
@@ -102,7 +103,6 @@ suite('Jupyter Execution', async () => {
     const pythonSettings = new MockJupyterSettings(undefined);
     const jupyterOnPath = getOSType() === OSType.Windows ? '/foo/bar/jupyter.exe' : '/foo/bar/jupyter';
     let ipykernelInstallCount = 0;
-    let kernelSelector: KernelSelector;
     let notebookStarter: NotebookStarter;
     const workingPython: PythonEnvironment = {
         path: '/foo/bar/python.exe',
@@ -741,9 +741,8 @@ suite('Jupyter Execution', async () => {
         activeInterpreter: PythonEnvironment,
         notebookStdErr?: string[],
         skipSearch?: boolean
-    ): JupyterExecutionFactory {
-        return createExecutionAndReturnProcessService(activeInterpreter, notebookStdErr, skipSearch)
-            .jupyterExecutionFactory;
+    ): HostJupyterExecution {
+        return createExecutionAndReturnProcessService(activeInterpreter, notebookStdErr, skipSearch).jupyterExecution;
     }
     function createExecutionAndReturnProcessService(
         activeInterpreter: PythonEnvironment,
@@ -752,7 +751,7 @@ suite('Jupyter Execution', async () => {
         runInDocker?: boolean
     ): {
         executionService: IPythonExecutionService;
-        jupyterExecutionFactory: JupyterExecutionFactory;
+        jupyterExecution: HostJupyterExecution;
     } {
         // Setup defaults
         when(interpreterService.onDidChangeInterpreter).thenReturn(dummyEvent.event);
@@ -826,26 +825,26 @@ suite('Jupyter Execution', async () => {
             executionFactory.createActivatedEnvironment(argThat((o) => !o || o.interpreter === activeInterpreter))
         ).thenResolve(activeService.object);
         when(
-            executionFactory.createActivatedEnvironment(argThat((o) => o && o.interpreter.path === workingPython.path))
+            executionFactory.createActivatedEnvironment(
+                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, workingPython.path))
+            )
         ).thenResolve(workingService.object);
         when(
             executionFactory.createActivatedEnvironment(
-                argThat((o) => o && o.interpreter.path === missingKernelPython.path)
+                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, missingKernelPython.path))
             )
         ).thenResolve(missingKernelService.object);
         when(
             executionFactory.createActivatedEnvironment(
-                argThat((o) => o && o.interpreter.path === missingNotebookPython.path)
+                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, missingNotebookPython.path))
             )
         ).thenResolve(missingNotebookService.object);
         when(
             executionFactory.createActivatedEnvironment(
-                argThat((o) => o && o.interpreter.path === missingNotebookPython2.path)
+                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, missingNotebookPython2.path))
             )
         ).thenResolve(missingNotebookService2.object);
         when(processServiceFactory.create()).thenResolve(processService.object);
-
-        when(liveShare.getApi()).thenResolve(null);
 
         // Service container needs logger, file system, and config service
         when(serviceContainer.get<IConfigurationService>(IConfigurationService)).thenReturn(instance(configService));
@@ -865,7 +864,6 @@ suite('Jupyter Execution', async () => {
         // Setup default settings
         pythonSettings.assign({
             allowImportFromNotebook: true,
-            alwaysTrustNotebooks: true,
             jupyterLaunchTimeout: 10,
             jupyterLaunchRetries: 3,
             jupyterServerType: 'local',
@@ -886,7 +884,7 @@ suite('Jupyter Execution', async () => {
             codeRegularExpression: '^(#\\s*%%|#\\s*\\<codecell\\>|#\\s*In\\[\\d*?\\]|#\\s*In\\[ \\])',
             markdownRegularExpression: '^(#\\s*%%\\s*\\[markdown\\]|#\\s*\\<markdowncell\\>)',
             allowLiveShare: false,
-            enablePlotViewer: true,
+            generateSVGPlots: false,
             runStartupCommands: '',
             debugJustMyCode: true,
             variableQueries: [],
@@ -935,28 +933,6 @@ suite('Jupyter Execution', async () => {
         when(serviceContainer.get<IPythonExecutionFactory>(IPythonExecutionFactory)).thenReturn(
             instance(executionFactory)
         );
-        kernelSelector = mock(KernelSelector);
-        const kernelSpec: IJupyterKernelSpec = {
-            argv: [],
-            display_name: 'hello',
-            language: PYTHON_LANGUAGE,
-            name: 'hello',
-            path: '',
-            env: undefined
-        };
-        when(
-            kernelSelector.getPreferredKernelForLocalConnection(
-                anything(),
-                anything(),
-                anything(),
-                anything(),
-                anything()
-            )
-        ).thenResolve({
-            kernelSpec,
-            kind: 'startUsingKernelSpec'
-        });
-
         const dependencyService = mock(JupyterInterpreterDependencyService);
         when(dependencyService.areDependenciesInstalled(anything(), anything())).thenCall(
             async (interpreter: PythonEnvironment) => {
@@ -982,7 +958,6 @@ suite('Jupyter Execution', async () => {
             instance(jupyterInterpreterService),
             instance(interpreterService),
             instance(dependencyService),
-            instance(fileSystem),
             instance(executionFactory),
             instance(mock<IOutputChannel>()),
             instance(mock<IPathUtils>())
@@ -996,19 +971,30 @@ suite('Jupyter Execution', async () => {
             instance(serviceContainer),
             instance(jupyterOutputChannel)
         );
-        when(serviceContainer.get<KernelSelector>(KernelSelector)).thenReturn(instance(kernelSelector));
+        const kernelFinder = mock(LocalKernelFinder);
+        const kernelSpec: IJupyterKernelSpec = {
+            name: 'somename',
+            path: 'python',
+            argv: ['python'],
+            display_name: 'somename'
+        };
+        const kernelMetadata: LocalKernelConnectionMetadata = {
+            kind: 'startUsingKernelSpec',
+            kernelSpec,
+            id: getKernelId(kernelSpec)
+        };
+        when(kernelFinder.findKernel(anything(), anything(), anything())).thenResolve(kernelMetadata);
         when(serviceContainer.get<NotebookStarter>(NotebookStarter)).thenReturn(notebookStarter);
+        when(serviceContainer.get<ILocalKernelFinder>(ILocalKernelFinder)).thenReturn(instance(kernelFinder));
         return {
             executionService: activeService.object,
-            jupyterExecutionFactory: new JupyterExecutionFactory(
-                instance(liveShare),
+            jupyterExecution: new HostJupyterExecution(
                 instance(interpreterService),
                 (disposableRegistry as unknown) as any[],
                 disposableRegistry,
                 instance(fileSystem),
                 instance(workspaceService),
                 instance(configService),
-                instance(kernelSelector),
                 notebookStarter,
                 instance(application),
                 instance(jupyterOutputChannel),
@@ -1027,7 +1013,7 @@ suite('Jupyter Execution', async () => {
     }).timeout(10000);
 
     test('Includes correct args for running in docker', async () => {
-        const { jupyterExecutionFactory } = createExecutionAndReturnProcessService(
+        const { jupyterExecution: jupyterExecutionFactory } = createExecutionAndReturnProcessService(
             workingPython,
             undefined,
             undefined,
@@ -1043,7 +1029,7 @@ suite('Jupyter Execution', async () => {
     test('Failing notebook throws exception', async () => {
         const execution = createExecution(missingNotebookPython);
         when(interpreterService.getInterpreters(anything())).thenResolve([missingNotebookPython]);
-        await assert.isRejected(execution.connectToNotebookServer(), 'Data Science library jupyter is not installed.');
+        await assert.isRejected(execution.connectToNotebookServer(), 'Running cells requires jupyter.');
     }).timeout(10000);
 
     test('Missing kernel python still finds interpreter', async () => {

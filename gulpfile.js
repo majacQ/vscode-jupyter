@@ -9,9 +9,7 @@
 'use strict';
 
 const gulp = require('gulp');
-const ts = require('gulp-typescript');
 const spawn = require('cross-spawn');
-const colors = require('colors/safe');
 const path = require('path');
 const del = require('del');
 const fs = require('fs-extra');
@@ -20,9 +18,9 @@ const nativeDependencyChecker = require('node-has-native-dependencies');
 const flat = require('flat');
 const { argv } = require('yargs');
 const os = require('os');
-const { ExtensionRootDir } = require('./build/util');
+const { spawnSync } = require('child_process');
 const isCI = process.env.TF_BUILD !== undefined || process.env.GITHUB_ACTIONS === 'true';
-const { downloadRendererExtension } = require('./build/ci/downloadRenderer');
+const webpackEnv = { NODE_OPTIONS: '--max_old_space_size=9096' };
 
 gulp.task('compile', async (done) => {
     // Use tsc so we can generate source maps that look just like tsc does (gulp-sourcemap does not generate them the same way)
@@ -37,11 +35,21 @@ gulp.task('compile', async (done) => {
     }
 });
 
+gulp.task('createNycFolder', async (done) => {
+    try {
+        const fs = require('fs');
+        fs.mkdirSync(path.join(__dirname, '.nyc_output'));
+    } catch (e) {
+        //
+    }
+    done();
+});
+
 gulp.task('output:clean', () => del(['coverage']));
 
 gulp.task('clean:cleanExceptTests', () => del(['clean:vsix', 'out/client', 'out/datascience-ui', 'out/server']));
 gulp.task('clean:vsix', () => del(['*.vsix']));
-gulp.task('clean:out', () => del(['out/**', '!out', '!out/BCryptGenRandom/**', '!out/client_renderer/**']));
+gulp.task('clean:out', () => del(['out/**', '!out', '!out/client_renderer/**']));
 gulp.task('clean:ipywidgets', () => spawnAsync('npm', ['run', 'build-ipywidgets-clean'], webpackEnv));
 
 gulp.task('clean', gulp.parallel('output:clean', 'clean:vsix', 'clean:out'));
@@ -52,10 +60,70 @@ gulp.task('checkNativeDependencies', (done) => {
     }
     done();
 });
+gulp.task('checkNpmDependencies', (done) => {
+    /**
+     * Sometimes we have to update the package-lock.json file to upload dependencies.
+     * Thisscript will ensure that even if the package-lock.json is re-generated the (minimum) version numbers are still as expected.
+     */
+    const packageLock = require('./package-lock.json');
+    const errors = [];
+
+    const expectedVersions = [
+        { name: 'trim', version: '0.0.3' },
+        { name: 'node_modules/trim', version: '0.0.3' }
+    ];
+    function checkPackageVersions(packages, parent) {
+        if (!packages) {
+            return;
+        }
+        expectedVersions.forEach((expectedVersion) => {
+            if (!packages[expectedVersion.name]) {
+                return;
+            }
+            const version = packages[expectedVersion.name].version || packages[expectedVersion.name];
+            if (!version) {
+                return;
+            }
+            if (!version.includes(expectedVersion.version)) {
+                errors.push(
+                    `${expectedVersion.name} version needs to be at least ${expectedVersion.version
+                    }, current ${version}, ${parent ? `(parent package ${parent})` : ''}`
+                );
+            }
+        });
+    }
+    function checkPackageDependencies(packages) {
+        if (!packages) {
+            return;
+        }
+        Object.keys(packages).forEach((packageName) => {
+            const dependencies = packages[packageName]['dependencies'];
+            if (dependencies) {
+                checkPackageVersions(dependencies, packageName);
+            }
+        });
+    }
+
+    checkPackageVersions(packageLock['packages']);
+    checkPackageVersions(packageLock['dependencies']);
+    checkPackageDependencies(packageLock['packages']);
+
+    if (errors.length > 0) {
+        errors.forEach((ex) => console.error(ex));
+        throw new Error(errors.join(', '));
+    }
+    done();
+});
+
+gulp.task('installPythonLibs', async () => {
+    const output = spawnSync('python -m pip --disable-pip-version-check install -t ./pythonFiles/lib/python --no-cache-dir --implementation py --no-deps --upgrade -r ./requirements.txt');
+    if (output.error){
+        console.error(output.stderr);
+        throw output.error;
+    }
+});
 
 gulp.task('compile-ipywidgets', () => buildIPyWidgets());
-
-const webpackEnv = { NODE_OPTIONS: '--max_old_space_size=9096' };
 
 async function buildIPyWidgets() {
     // if the output ipywidgest file exists, then no need to re-build.
@@ -65,10 +133,6 @@ async function buildIPyWidgets() {
     }
     await spawnAsync('npm', ['run', 'build-ipywidgets'], webpackEnv);
 }
-gulp.task('compile-notebooks', async () => {
-    await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-notebooks.config.js');
-});
-
 gulp.task('compile-renderers', async () => {
     console.log('Building renderers');
     await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-renderers.config.js');
@@ -78,16 +142,10 @@ gulp.task('compile-viewers', async () => {
     await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-viewers.config.js');
 });
 
-// On CI, when running Notebook tests, we don't need old webviews.
-// Simple & temporary optimization for the Notebook Test Job.
-if (isCI && process.env.VSC_JUPYTER_SKIP_WEBVIEW_BUILD === 'true') {
-    gulp.task('compile-webviews', async () => {});
-} else {
-    gulp.task(
-        'compile-webviews',
-        gulp.series('compile-ipywidgets', gulp.parallel('compile-notebooks', 'compile-viewers', 'compile-renderers'))
-    );
-}
+gulp.task(
+    'compile-webviews',
+    gulp.series('compile-ipywidgets', gulp.parallel('compile-viewers', 'compile-renderers'))
+);
 
 async function buildWebPackForDevOrProduction(configFile, configNameForProductionBuilds) {
     if (configNameForProductionBuilds) {
@@ -103,19 +161,10 @@ gulp.task('webpack', async () => {
     // Build DS stuff (separately as it uses far too much memory and slows down CI).
     // Individually is faster on CI.
     await buildIPyWidgets();
-    await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-notebooks.config.js', 'production');
     await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-renderers.config.js', 'production');
     await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-viewers.config.js', 'production');
     await buildWebPackForDevOrProduction('./build/webpack/webpack.extension.config.js', 'extension');
 });
-
-gulp.task('updateLicense', async () => {
-    await updateLicense(argv);
-});
-
-async function updateLicense(args) {
-    await fs.copyFile('extension_license.txt', 'LICENSE.txt');
-}
 
 gulp.task('updateBuildNumber', async () => {
     await updateBuildNumber(argv);
@@ -128,12 +177,25 @@ async function updateBuildNumber(args) {
         const packageJson = JSON.parse(packageJsonContents);
 
         // Change version number
+        // 3rd part of version is limited to Max Int32 numbers (in VSC Marketplace).
+        // Hence build numbers can only be YYYY.MMM.2147483647
+        // NOTE: For each of the following strip the first 3 characters from the build number.
+        //  E.g. if we have build number of `build number = 3264527301, then take 4527301
+
+        // To ensure we can have point releases & insider builds, we're going with the following format:
+        // Insider & Release builds will be YYYY.MMM.100<build number>
+        // When we have a hot fix, we update the version to YYYY.MMM.110<build number>
+        // If we have more hot fixes, they'll be YYYY.MMM.120<build number>, YYYY.MMM.130<build number>, & so on.
+
         const versionParts = packageJson.version.split('.');
         const buildNumberPortion =
             versionParts.length > 2 ? versionParts[2].replace(/(\d+)/, args.buildNumber) : args.buildNumber;
         const newVersion =
             versionParts.length > 1
-                ? `${versionParts[0]}.${versionParts[1]}.${buildNumberPortion}`
+                ? `${versionParts[0]}.${versionParts[1]}.${versionParts[2].substring(
+                    0,
+                    3
+                )}${buildNumberPortion.substring(0, buildNumberPortion.length - 3)}`
                 : packageJson.version;
         packageJson.version = newVersion;
 
@@ -194,8 +256,9 @@ function getAllowedWarningsForWebPack(buildConfig) {
                 'WARNING in asset size limit: The following asset(s) exceed the recommended size limit (244 KiB).',
                 'WARNING in entrypoint size limit: The following entrypoint(s) combined asset size exceeds the recommended limit (244 KiB). This can impact web performance.',
                 'WARNING in webpack performance recommendations:',
-                'WARNING in ./node_modules/vsls/vscode.js',
                 'WARNING in ./node_modules/encoding/lib/iconv-loader.js',
+                'WARNING in ./node_modules/keyv/src/index.js',
+                'ERROR in ./node_modules/got/index.js',
                 'WARNING in ./node_modules/ws/lib/BufferUtil.js',
                 'WARNING in ./node_modules/ws/lib/buffer-util.js',
                 'WARNING in ./node_modules/ws/lib/Validation.js',
@@ -211,6 +274,7 @@ function getAllowedWarningsForWebPack(buildConfig) {
         case 'extension':
             return [
                 'WARNING in ./node_modules/encoding/lib/iconv-loader.js',
+                'WARNING in ./node_modules/keyv/src/index.js',
                 'WARNING in ./node_modules/ws/lib/BufferUtil.js',
                 'WARNING in ./node_modules/ws/lib/buffer-util.js',
                 'WARNING in ./node_modules/ws/lib/Validation.js',
@@ -234,41 +298,12 @@ function getAllowedWarningsForWebPack(buildConfig) {
     }
 }
 
-gulp.task('includeBCryptGenRandomExe', async () => {
-    const src = path.join(ExtensionRootDir, 'src', 'BCryptGenRandom', 'BCryptGenRandom.exe');
-    const dest = path.join(ExtensionRootDir, 'out', 'BCryptGenRandom', 'BCryptGenRandom.exe');
-    if (fs.existsSync(dest)) {
-        return;
-    }
-    await fs.stat(src);
-    await fs.ensureDir(path.dirname(dest));
-    await fs.copyFile(src, dest);
-});
-
-gulp.task('downloadRendererExtension', async () => {
-    await downloadRendererExtension();
-});
-
-gulp.task('prePublishBundle', gulp.series('includeBCryptGenRandomExe', 'downloadRendererExtension', 'webpack'));
-gulp.task('checkDependencies', gulp.series('checkNativeDependencies'));
-// On CI, when running Notebook tests, we don't need old webviews.
-// Simple & temporary optimization for the Notebook Test Job.
-if (isCI && process.env.VSC_JUPYTER_SKIP_WEBVIEW_BUILD === 'true') {
-    gulp.task(
-        'prePublishNonBundle',
-        gulp.parallel('compile', 'includeBCryptGenRandomExe', 'downloadRendererExtension')
-    );
-} else {
-    gulp.task(
-        'prePublishNonBundle',
-        gulp.parallel(
-            'compile',
-            'includeBCryptGenRandomExe',
-            'downloadRendererExtension',
-            gulp.series('compile-webviews')
-        )
-    );
-}
+gulp.task('prePublishBundle', gulp.series('webpack'));
+gulp.task('checkDependencies', gulp.series('checkNativeDependencies', 'checkNpmDependencies'));
+gulp.task(
+    'prePublishNonBundle',
+    gulp.parallel('compile', gulp.series('compile-webviews'))
+);
 
 function spawnAsync(command, args, env, rejectOnStdErr = false) {
     env = env || {};
@@ -306,7 +341,7 @@ function hasNativeDependencies() {
         path.dirname(item.substring(item.indexOf('node_modules') + 'node_modules'.length)).split(path.sep)
     )
         .filter((item) => item.length > 0)
-        .filter((item) => !item.includes('zeromq') && !item.includes('keytar')) // Known native modules
+        .filter((item) => !item.includes('zeromq') && !item.includes('canvas') && !item.includes('keytar')) // Known native modules
         .filter(
             (item) =>
                 jsonProperties.findIndex((flattenedDependency) =>
@@ -319,3 +354,8 @@ function hasNativeDependencies() {
     }
     return false;
 }
+
+gulp.task('generateTelemetryMd', async () => {
+    const generator = require('./out/tools/telemetryGenerator');
+    return generator.default();
+})

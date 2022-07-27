@@ -1,17 +1,15 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 'use strict';
-import type { Kernel } from '@jupyterlab/services';
+import type { KernelSpec } from '@jupyterlab/services';
 import * as path from 'path';
 import { CancellationToken } from 'vscode';
 import { createPromiseFromCancellation } from '../../../common/cancellation';
 import { traceInfo } from '../../../common/logger';
-import { IFileSystem } from '../../../common/platform/types';
 
-import { IPythonExecutionFactory } from '../../../common/process/types';
 import { PythonEnvironment } from '../../../pythonEnvironments/info';
-import { getRealPath } from '../../common';
 import { IJupyterKernelSpec } from '../../types';
+import { tryGetRealPath } from '../../common';
 
 export class JupyterKernelSpec implements IJupyterKernelSpec {
     public name: string;
@@ -25,7 +23,7 @@ export class JupyterKernelSpec implements IJupyterKernelSpec {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     public metadata?: Record<string, any> & { interpreter?: Partial<PythonEnvironment> };
     constructor(
-        specModel: Kernel.ISpecModel,
+        specModel: KernelSpec.ISpecModel,
         public readonly specFile?: string,
         public readonly interpreterPath?: string
     ) {
@@ -51,36 +49,26 @@ export class JupyterKernelSpec implements IJupyterKernelSpec {
  * @param {CancellationToken} [token]
  * @returns
  */
-export async function parseKernelSpecs(
-    stdout: string,
-    fs: IFileSystem,
-    execFactory: IPythonExecutionFactory,
-    token?: CancellationToken
-) {
+export async function parseKernelSpecs(stdout: string, token?: CancellationToken) {
     traceInfo('Parsing kernelspecs from jupyter');
     // This should give us back a key value pair we can parse
     const jsOut = JSON.parse(stdout.trim()) as {
-        kernelspecs: Record<string, { resource_dir: string; spec: Omit<Kernel.ISpecModel, 'name'> }>;
+        kernelspecs: Record<string, { resource_dir: string; spec: Omit<KernelSpec.ISpecModel, 'name'> }>;
     };
     const kernelSpecs = jsOut.kernelspecs;
 
     const specs = await Promise.race([
         Promise.all(
             Object.keys(kernelSpecs).map(async (kernelName) => {
-                const spec = kernelSpecs[kernelName].spec as Kernel.ISpecModel;
+                const spec = kernelSpecs[kernelName].spec as KernelSpec.ISpecModel;
                 // Add the missing name property.
                 const model = {
                     ...spec,
                     name: kernelName
                 };
-                const specFile = await getRealPath(
-                    fs,
-                    execFactory,
-                    spec.argv[0],
-                    path.join(kernelSpecs[kernelName].resource_dir, 'kernel.json')
-                );
+                const specFile = await tryGetRealPath(path.join(kernelSpecs[kernelName].resource_dir, 'kernel.json'));
                 if (specFile) {
-                    return new JupyterKernelSpec(model as Kernel.ISpecModel, specFile);
+                    return new JupyterKernelSpec(model as KernelSpec.ISpecModel, specFile);
                 }
             })
         ),

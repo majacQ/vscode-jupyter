@@ -7,7 +7,6 @@
 // import * as crypto from 'crypto';
 
 /* eslint-disable  */
-
 import { relative } from 'path';
 import * as vscode from 'vscode';
 import { vscMockHtmlContent } from './htmlContent';
@@ -21,7 +20,6 @@ export namespace vscMockExtHostedTypes {
             public readonly editable?: boolean,
             public readonly breakpointMargin?: boolean,
             public readonly runnable?: boolean,
-            public readonly hasExecutionOrder?: boolean,
             public readonly executionOrder?: number,
             public readonly runState?: NotebookCellRunState,
             public readonly runStartTime?: number,
@@ -37,7 +35,6 @@ export namespace vscMockExtHostedTypes {
             editable?: boolean | null;
             breakpointMargin?: boolean | null;
             runnable?: boolean | null;
-            hasExecutionOrder?: boolean | null;
             executionOrder?: number | null;
             runState?: NotebookCellRunState | null;
             runStartTime?: number | null;
@@ -51,7 +48,6 @@ export namespace vscMockExtHostedTypes {
                 change.editable || this.editable,
                 change.breakpointMargin || this.breakpointMargin,
                 change.runnable || this.runnable,
-                change.hasExecutionOrder || this.hasExecutionOrder,
                 change.executionOrder || this.executionOrder,
                 change.runState || this.runState,
                 change.runStartTime || this.runStartTime,
@@ -620,13 +616,12 @@ export namespace vscMockExtHostedTypes {
         ): void {
             // Noop
         }
-        replaceNotebookMetadata(_uri: vscode.Uri, _value: vscode.NotebookDocumentMetadata): void {
+        replaceNotebookMetadata(_uri: vscode.Uri, _value: { [key: string]: any }): void {
             //
         }
         replaceNotebookCells(
             _uri: vscode.Uri,
-            _start: number,
-            _end: number,
+            _range: vscode.NotebookRange,
             _cells: vscode.NotebookCellData[],
             _metadata?: vscode.WorkspaceEditEntryMetadata
         ): void {
@@ -645,7 +640,7 @@ export namespace vscMockExtHostedTypes {
         replaceNotebookCellMetadata(
             _uri: vscode.Uri,
             _index: number,
-            _cellMetadata: vscode.NotebookCellMetadata,
+            _cellMetadata: { [key: string]: any },
             _metadata?: vscode.WorkspaceEditEntryMetadata
         ): void {
             // Noop.
@@ -953,6 +948,34 @@ export namespace vscMockExtHostedTypes {
                 source: this.source,
                 code: this.code
             };
+        }
+    }
+
+    export class CallHierarchyItem {
+        _sessionId?: string;
+        _itemId?: string;
+
+        kind: SymbolKind;
+        name: string;
+        detail?: string;
+        uri: vscUri.URI;
+        range: Range;
+        selectionRange: Range;
+
+        constructor(
+            kind: SymbolKind,
+            name: string,
+            detail: string,
+            uri: vscUri.URI,
+            range: Range,
+            selectionRange: Range
+        ) {
+            this.kind = kind;
+            this.name = name;
+            this.detail = detail;
+            this.uri = uri;
+            this.range = range;
+            this.selectionRange = selectionRange;
         }
     }
 
@@ -1523,6 +1546,10 @@ export namespace vscMockExtHostedTypes {
 
         get id(): string {
             return this._id;
+        }
+
+        get isDefault() {
+            return false;
         }
     }
 

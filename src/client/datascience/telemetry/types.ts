@@ -4,9 +4,24 @@
 import { EnvironmentType } from '../../pythonEnvironments/info';
 import { KernelConnectionMetadata } from '../jupyter/kernels/types';
 
-let connection: KernelConnectionMetadata;
 export type ResourceSpecificTelemetryProperties = Partial<{
     resourceType: 'notebook' | 'interactive';
+    /**
+     * Whether the notebook startup UI (progress indicator & the like) was displayed to the user or not.
+     * If its not displayed, then its considered an auto start (start in the background, like pre-warming kernel)
+     */
+    disableUI?: boolean;
+    /**
+     * Hash of the resource (notebook.uri or pythonfile.uri associated with this).
+     * If we run the same notebook tomorrow, the hash will be the same.
+     */
+    resourceHash?: string;
+    /**
+     * Unique identifier for an instance of a notebook session.
+     * If we restart or run this notebook tomorrow, this id will be different.
+     * Id could be something as simple as a hash of the current Epoch time.
+     */
+    kernelSessionId: string;
     /**
      * Whether this resource is using the active Python interpreter or not.
      */
@@ -34,7 +49,7 @@ export type ResourceSpecificTelemetryProperties = Partial<{
     /**
      * Whether kernel was started using kernel spec, interpreter, etc.
      */
-    kernelConnectionType?: typeof connection.kind;
+    kernelConnectionType?: KernelConnectionMetadata['kind'];
     /**
      * Language of the kernel connection.
      */

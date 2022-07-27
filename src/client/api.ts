@@ -3,21 +3,13 @@
 
 'use strict';
 
-import { Disposable, Event, NotebookCell, NotebookCellRunState, Uri } from 'vscode';
+import { ExtensionMode } from 'vscode';
 import { IPythonApiProvider, PythonApi } from './api/types';
 import { isTestExecution } from './common/constants';
 import { traceError } from './common/logger';
-import { VSCodeNotebookProvider } from './datascience/constants';
+import { IExtensionContext } from './common/types';
 import { IDataViewerDataProvider, IDataViewerFactory } from './datascience/data-viewing/types';
-import { CreationOptionService } from './datascience/notebook/creation/creationOptionsService';
-import { KernelStateEventArgs } from './datascience/notebookExtensibility';
-import {
-    IJupyterUriProvider,
-    IJupyterUriProviderRegistration,
-    INotebookEditorProvider,
-    INotebookExtensibility,
-    IWebviewExtensibility
-} from './datascience/types';
+import { IJupyterUriProvider, IJupyterUriProviderRegistration, INotebookEditorProvider } from './datascience/types';
 import { IServiceContainer, IServiceManager } from './ioc/types';
 
 /*
@@ -32,13 +24,6 @@ export interface IExtensionApi {
      * @memberof IExtensionApi
      */
     ready: Promise<void>;
-    readonly onKernelStateChange: Event<KernelStateEventArgs>;
-    registerCellToolbarButton(
-        callback: (cell: NotebookCell, isInteractive: boolean, resource: Uri) => Promise<void>,
-        codicon: string,
-        statusToEnable: NotebookCellRunState[],
-        tooltip: string
-    ): Disposable;
     /**
      * Launches Data Viewer component.
      * @param {IDataViewerDataProvider} dataProvider Instance that will be used by the Data Viewer component to fetch data.
@@ -52,19 +37,6 @@ export interface IExtensionApi {
     registerRemoteServerProvider(serverProvider: IJupyterUriProvider): void;
     registerPythonApi(pythonApi: PythonApi): void;
     /**
-     * When called by other extensions we will display these extensions in a dropdown list when creating a new notebook.
-     */
-    registerNewNotebookContent(options: {
-        /**
-         * Use this language as the language of cells for new notebooks created (when user picks this extension).
-         */
-        defaultCellLanguage: string;
-        /**
-         * Value in the quickpick (if not provided, will use the displayName of the extension).
-         */
-        label: string;
-    }): Promise<void>;
-    /**
      * Creates a blank notebook and defaults the empty cell to the language provided.
      */
     createBlankNotebook(options: { defaultCellLanguage: string }): Promise<void>;
@@ -74,10 +46,9 @@ export function buildApi(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ready: Promise<any>,
     serviceManager: IServiceManager,
-    serviceContainer: IServiceContainer
+    serviceContainer: IServiceContainer,
+    context: IExtensionContext
 ): IExtensionApi {
-    const notebookExtensibility = serviceContainer.get<INotebookExtensibility>(INotebookExtensibility);
-    const webviewExtensibility = serviceContainer.get<IWebviewExtensibility>(IWebviewExtensibility);
     let registered = false;
     const api: IExtensionApi = {
         // 'ready' will propagate the exception, but we must log it here first.
@@ -101,21 +72,18 @@ export function buildApi(
             const container = serviceContainer.get<IJupyterUriProviderRegistration>(IJupyterUriProviderRegistration);
             container.registerProvider(picker);
         },
-        onKernelStateChange: notebookExtensibility.onKernelStateChange.bind(notebookExtensibility),
-        registerCellToolbarButton: webviewExtensibility.registerCellToolbarButton.bind(webviewExtensibility),
-        registerNewNotebookContent(options: { defaultCellLanguage: string; label?: string }) {
-            return serviceContainer
-                .get<CreationOptionService>(CreationOptionService)
-                .registerNewNotebookContent(options);
-        },
         createBlankNotebook: async (options: { defaultCellLanguage: string }): Promise<void> => {
-            const service = serviceContainer.get<INotebookEditorProvider>(VSCodeNotebookProvider);
+            const service = serviceContainer.get<INotebookEditorProvider>(INotebookEditorProvider);
             await service.createNew(options);
         }
     };
 
-    // In test environment return the DI Container.
-    if (isTestExecution() || process.env.VSC_JUPYTER_EXPOSE_SVC) {
+    // In test/dev environment return the DI Container.
+    if (
+        isTestExecution() ||
+        process.env.VSC_JUPYTER_EXPOSE_SVC ||
+        context.extensionMode === ExtensionMode.Development
+    ) {
         /* eslint-disable @typescript-eslint/no-explicit-any */
         (api as any).serviceContainer = serviceContainer;
         (api as any).serviceManager = serviceManager;

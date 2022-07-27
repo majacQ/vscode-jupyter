@@ -7,14 +7,19 @@ import { inject, injectable, multiInject, named, optional } from 'inversify';
 import { CodeLens, ConfigurationTarget, env, Range, Uri } from 'vscode';
 import { DebugProtocol } from 'vscode-debugprotocol';
 import { ICommandNameArgumentTypeMapping } from '../../common/application/commands';
-import { IApplicationShell, ICommandManager, IDebugService, IDocumentManager } from '../../common/application/types';
-import { UseVSCodeNotebookEditorApi } from '../../common/constants';
+import {
+    IApplicationShell,
+    ICommandManager,
+    IDebugService,
+    IDocumentManager,
+    IWorkspaceService
+} from '../../common/application/types';
 import { traceError } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
 
 import { IConfigurationService, IDisposable, IOutputChannel } from '../../common/types';
 import { DataScience } from '../../common/utils/localize';
-import { noop } from '../../common/utils/misc';
+import { isUri, noop } from '../../common/utils/misc';
 import { LogLevel } from '../../logging/levels';
 import { captureTelemetry, sendTelemetryEvent } from '../../telemetry';
 import { EventName } from '../../telemetry/constants';
@@ -28,10 +33,11 @@ import {
     ICodeWatcher,
     IDataScienceCodeLensProvider,
     IDataScienceCommandListener,
+    IDataScienceErrorHandler,
+    IInteractiveWindowProvider,
     IJupyterServerUriStorage,
     IJupyterVariableDataProviderFactory,
-    IJupyterVariables,
-    INotebookEditorProvider
+    IJupyterVariables
 } from '../types';
 import { JupyterCommandLineSelectorCommand } from './commandLineSelector';
 import { ExportCommands } from './exportCommands';
@@ -53,7 +59,6 @@ export class CommandRegistry implements IDisposable {
         @inject(NotebookCommands) private readonly notebookCommands: NotebookCommands,
         @inject(JupyterCommandLineSelectorCommand)
         private readonly commandLineCommand: JupyterCommandLineSelectorCommand,
-        @inject(INotebookEditorProvider) private notebookEditorProvider: INotebookEditorProvider,
         @inject(IDebugService) private debugService: IDebugService,
         @inject(IConfigurationService) private configService: IConfigurationService,
         @inject(IApplicationShell) private appShell: IApplicationShell,
@@ -65,25 +70,20 @@ export class CommandRegistry implements IDisposable {
         @inject(IDataViewerFactory) private readonly dataViewerFactory: IDataViewerFactory,
         @inject(IJupyterServerUriStorage) private readonly serverUriStorage: IJupyterServerUriStorage,
         @inject(IJupyterVariables) @named(Identifiers.DEBUGGER_VARIABLES) private variableProvider: IJupyterVariables,
-        @inject(UseVSCodeNotebookEditorApi) private readonly useNativeNotebook: boolean,
-        @inject(NotebookCreator) private readonly nativeNotebookCreator: NotebookCreator
+        @inject(NotebookCreator) private readonly nativeNotebookCreator: NotebookCreator,
+        @inject(IWorkspaceService) private readonly workspace: IWorkspaceService,
+        @inject(IInteractiveWindowProvider) private readonly interactiveWindowProvider: IInteractiveWindowProvider,
+        @inject(IDataScienceErrorHandler) private readonly errorHandler: IDataScienceErrorHandler
     ) {
         this.disposables.push(this.serverSelectedCommand);
         this.disposables.push(this.notebookCommands);
         this.dataViewerChecker = new DataViewerChecker(configService, appShell);
+        if (!this.workspace.isTrusted) {
+            this.workspace.onDidGrantWorkspaceTrust(this.registerCommandsIfTrusted, this, this.disposables);
+        }
     }
     public register() {
-        this.commandLineCommand.register();
-        this.serverSelectedCommand.register();
-        this.notebookCommands.register();
-        this.exportCommand.register();
-        this.registerCommand(Commands.RunAllCells, this.runAllCells);
-        this.registerCommand(Commands.RunCell, this.runCell);
-        this.registerCommand(Commands.RunCurrentCell, this.runCurrentCell);
-        this.registerCommand(Commands.RunCurrentCellAdvance, this.runCurrentCellAndAdvance);
-        this.registerCommand(Commands.ExecSelectionInInteractiveWindow, this.runSelectionOrLine);
-        this.registerCommand(Commands.RunAllCellsAbove, this.runAllCellsAbove);
-        this.registerCommand(Commands.RunCellAndAllBelow, this.runCellAndAllBelow);
+        this.registerCommandsIfTrusted();
         this.registerCommand(Commands.InsertCellBelowPosition, this.insertCellBelowPosition);
         this.registerCommand(Commands.InsertCellBelow, this.insertCellBelow);
         this.registerCommand(Commands.InsertCellAbove, this.insertCellAbove);
@@ -98,31 +98,17 @@ export class CommandRegistry implements IDisposable {
         this.registerCommand(Commands.ChangeCellToCode, this.changeCellToCode);
         this.registerCommand(Commands.GotoNextCellInFile, this.gotoNextCellInFile);
         this.registerCommand(Commands.GotoPrevCellInFile, this.gotoPrevCellInFile);
-        this.registerCommand(Commands.RunAllCellsAbovePalette, this.runAllCellsAboveFromCursor);
-        this.registerCommand(Commands.RunCellAndAllBelowPalette, this.runCellAndAllBelowFromCursor);
-        this.registerCommand(Commands.RunToLine, this.runToLine);
-        this.registerCommand(Commands.RunFromLine, this.runFromLine);
-        this.registerCommand(Commands.RunFileInInteractiveWindows, this.runFileInteractive);
-        this.registerCommand(Commands.DebugFileInInteractiveWindows, this.debugFileInteractive);
         this.registerCommand(Commands.AddCellBelow, this.addCellBelow);
-        this.registerCommand(Commands.RunCurrentCellAndAddBelow, this.runCurrentCellAndAddBelow);
-        this.registerCommand(Commands.DebugCell, this.debugCell);
-        this.registerCommand(Commands.DebugStepOver, this.debugStepOver);
-        this.registerCommand(Commands.DebugContinue, this.debugContinue);
-        this.registerCommand(Commands.DebugStop, this.debugStop);
-        this.registerCommand(Commands.DebugCurrentCellPalette, this.debugCurrentCellFromCursor);
         this.registerCommand(Commands.CreateNewNotebook, this.createNewNotebook);
         this.registerCommand(Commands.ViewJupyterOutput, this.viewJupyterOutput);
         this.registerCommand(Commands.LatestExtension, this.openPythonExtensionPage);
         this.registerCommand(Commands.EnableDebugLogging, this.enableDebugLogging);
         this.registerCommand(Commands.ResetLoggingLevel, this.resetLoggingLevel);
-        this.registerCommand(Commands.ShowDataViewer, this.onVariablePanelShowDataViewerRequest);
         this.registerCommand(
             Commands.EnableLoadingWidgetsFrom3rdPartySource,
             this.enableLoadingWidgetScriptsFromThirdParty
         );
         this.registerCommand(Commands.ClearSavedJupyterUris, this.clearJupyterUris);
-        this.registerCommand(Commands.OpenVariableView, this.openVariableView);
         if (this.commandListeners) {
             this.commandListeners.forEach((listener: IDataScienceCommandListener) => {
                 listener.register(this.commandManager);
@@ -131,6 +117,39 @@ export class CommandRegistry implements IDisposable {
     }
     public dispose() {
         this.disposables.forEach((d) => d.dispose());
+    }
+    private registerCommandsIfTrusted() {
+        if (!this.workspace.isTrusted) {
+            return;
+        }
+        this.commandLineCommand.register();
+        this.serverSelectedCommand.register();
+        this.notebookCommands.register();
+        this.exportCommand.register();
+        this.registerCommand(Commands.RunAllCells, this.runAllCells);
+        this.registerCommand(Commands.RunCell, this.runCell);
+        this.registerCommand(Commands.RunCurrentCell, this.runCurrentCell);
+        this.registerCommand(Commands.RunCurrentCellAdvance, this.runCurrentCellAndAdvance);
+        this.registerCommand(Commands.ExecSelectionInInteractiveWindow, (textOrUri: string | undefined | Uri) => {
+            void this.runSelectionOrLine(textOrUri);
+        });
+        this.registerCommand(Commands.RunAllCellsAbove, this.runAllCellsAbove);
+        this.registerCommand(Commands.RunCellAndAllBelow, this.runCellAndAllBelow);
+        this.registerCommand(Commands.RunAllCellsAbovePalette, this.runAllCellsAboveFromCursor);
+        this.registerCommand(Commands.RunCellAndAllBelowPalette, this.runCellAndAllBelowFromCursor);
+        this.registerCommand(Commands.RunCurrentCellAndAddBelow, this.runCurrentCellAndAddBelow);
+        this.registerCommand(Commands.DebugCell, this.debugCell);
+        this.registerCommand(Commands.DebugStepOver, this.debugStepOver);
+        this.registerCommand(Commands.DebugContinue, this.debugContinue);
+        this.registerCommand(Commands.DebugStop, this.debugStop);
+        this.registerCommand(Commands.DebugCurrentCellPalette, this.debugCurrentCellFromCursor);
+        this.registerCommand(Commands.OpenVariableView, this.openVariableView);
+        this.registerCommand(Commands.OpenOutlineView, this.openOutlineView);
+        this.registerCommand(Commands.ShowDataViewer, this.onVariablePanelShowDataViewerRequest);
+        this.registerCommand(Commands.RunToLine, this.runToLine);
+        this.registerCommand(Commands.RunFromLine, this.runFromLine);
+        this.registerCommand(Commands.RunFileInInteractiveWindows, this.runFileInteractive);
+        this.registerCommand(Commands.DebugFileInInteractiveWindows, this.debugFileInteractive);
     }
     private registerCommand<
         E extends keyof ICommandNameArgumentTypeMapping,
@@ -299,10 +318,14 @@ export class CommandRegistry implements IDisposable {
         }
     }
 
-    private async runSelectionOrLine(): Promise<void> {
+    private async runSelectionOrLine(textOrUri: string | undefined | Uri): Promise<void> {
         const activeCodeWatcher = this.getCurrentCodeWatcher();
         if (activeCodeWatcher) {
-            return activeCodeWatcher.runSelectionOrLine(this.documentManager.activeTextEditor);
+            return activeCodeWatcher.runSelectionOrLine(
+                this.documentManager.activeTextEditor,
+                // If this is a URI, the runSelectionOrLine is not expecting a URI, so act like nothing was sent.
+                isUri(textOrUri) ? undefined : textOrUri
+            );
         } else {
             return;
         }
@@ -333,9 +356,19 @@ export class CommandRegistry implements IDisposable {
     }
 
     @captureTelemetry(Telemetry.DebugStop)
-    private async debugStop(): Promise<void> {
+    private async debugStop(uri: Uri): Promise<void> {
         // Make sure that we are in debug mode
         if (this.debugService.activeDebugSession) {
+            // Attempt to get the interactive window for this file
+            const iw = this.interactiveWindowProvider.windows.find((w) => w.owner?.toString() == uri.toString());
+            if (iw) {
+                const kernel = await iw.kernelPromise;
+                if (kernel) {
+                    // If we have a matching iw, then stop current execution
+                    await kernel.interrupt();
+                }
+            }
+
             void this.commandManager.executeCommand('workbench.action.debug.stop');
         }
     }
@@ -456,11 +489,7 @@ export class CommandRegistry implements IDisposable {
     }
 
     private async createNewNotebook(): Promise<void> {
-        if (this.useNativeNotebook) {
-            await this.nativeNotebookCreator.createNewNotebook();
-        } else {
-            await this.notebookEditorProvider.createNew();
-        }
+        await this.nativeNotebookCreator.createNewNotebook();
     }
 
     private viewJupyterOutput() {
@@ -504,6 +533,11 @@ export class CommandRegistry implements IDisposable {
         // It's the given way to focus a single view so using that here, note that it needs to match the view ID
         return this.commandManager.executeCommand('jupyterViewVariables.focus');
     }
+
+    // Open the VS Code outline view
+    private async openOutlineView(): Promise<void> {
+        return this.commandManager.executeCommand('outline.focus');
+    }
     private async onVariablePanelShowDataViewerRequest(request: IShowDataViewerFromVariablePanel) {
         sendTelemetryEvent(EventName.OPEN_DATAVIEWER_FROM_VARIABLE_WINDOW_REQUEST);
         if (this.debugService.activeDebugSession) {
@@ -525,7 +559,7 @@ export class CommandRegistry implements IDisposable {
             } catch (e) {
                 sendTelemetryEvent(EventName.OPEN_DATAVIEWER_FROM_VARIABLE_WINDOW_ERROR, undefined, undefined, e);
                 traceError(e);
-                void this.appShell.showErrorMessage(e.toString());
+                void this.errorHandler.handleError(e);
             }
         }
     }

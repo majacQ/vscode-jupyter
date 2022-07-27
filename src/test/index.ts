@@ -18,7 +18,7 @@ const nyc = setupCoverage();
 import * as glob from 'glob';
 import * as Mocha from 'mocha';
 import * as path from 'path';
-import { IS_CI_SERVER_TEST_DEBUGGER } from './ciConstants';
+import { IS_CI_SERVER, IS_CI_SERVER_TEST_DEBUGGER } from './ciConstants';
 import {
     IS_MULTI_ROOT_TEST,
     IS_SMOKE_TEST,
@@ -80,7 +80,7 @@ function configure(): SetupOptions {
         useColors: true,
         invert,
         timeout: TEST_TIMEOUT,
-        retries: TEST_RETRYCOUNT,
+        retries: IS_CI_SERVER ? TEST_RETRYCOUNT : 0,
         grep,
         testFilesSuffix,
         // Force Mocha to exit after tests.
@@ -184,13 +184,9 @@ export async function run(): Promise<void> {
 
     /* eslint-disable no-console */
     console.time('Time taken to activate the extension');
-    try {
-        console.log('Starting & waiting for Python extension to activate');
-        await activateExtensionScript();
-        console.timeEnd('Time taken to activate the extension');
-    } catch (ex) {
-        console.error('Failed to activate python extension without errors', ex);
-    }
+    console.log('Starting & waiting for Python extension to activate');
+    await activateExtensionScript();
+    console.timeEnd('Time taken to activate the extension');
 
     try {
         // Run the tests.

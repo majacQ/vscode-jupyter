@@ -1,6 +1,7 @@
 import { Dropdown, IDropdownOption, ResponsiveMode } from '@fluentui/react';
 import * as React from 'react';
 import { IGetSliceRequest } from '../../client/datascience/data-viewing/types';
+import { SliceOperationSource } from '../../client/telemetry/constants';
 import { getLocString } from '../react-common/locReactSide';
 import { measureText } from '../react-common/textMeasure';
 import {
@@ -14,60 +15,16 @@ import {
 import './sliceControl.css';
 
 // These styles are passed to the FluentUI dropdown controls
-const styleOverrides = {
-    color: 'var(--vscode-dropdown-foreground)',
-    backgroundColor: 'var(--vscode-dropdown-background)',
-    fontFamily: 'var(--vscode-font-family)',
-    fontWeight: 'var(--vscode-font-weight)',
-    fontSize: 'var(--vscode-font-size)',
-    ':focus': {
-        color: 'var(--vscode-dropdown-foreground)'
-    },
-    ':active': {
-        color: 'var(--vscode-dropdown-foreground)'
-    },
-    ':hover': {
-        color: 'var(--vscode-dropdown-foreground)',
-        backgroundColor: 'var(--vscode-dropdown-background)'
-    }
-};
 const dropdownStyles = {
-    root: {
-        color: 'var(--vscode-dropdown-foreground)'
-    },
     dropdownItems: {
-        ...styleOverrides,
         selectors: {
             '@media(min-width: 300px)': {
                 maxHeight: 100
             }
         }
     },
-    callout: styleOverrides,
-    dropdownItem: styleOverrides,
-    dropdownItemSelected: {
-        color: 'var(--vscode-dropdown-foreground)',
-        fontFamily: 'var(--vscode-font-family)',
-        fontWeight: 'var(--vscode-font-weight)',
-        fontSize: 'var(--vscode-font-size)',
-        backgroundColor: 'var(--vscode-dropdown-background)',
-        opacity: '0.3'
-    },
-    dropdownItemDisabled: {
-        color: 'var(--vscode-dropdown-foreground)',
-        fontFamily: 'var(--vscode-font-family)',
-        fontWeight: 'var(--vscode-font-weight)',
-        fontSize: 'var(--vscode-font-size)',
-        backgroundColor: 'var(--vscode-dropdown-background)',
-        opacity: '0.3'
-    },
-    dropdownItemSelectedAndDisabled: {
-        color: 'var(--vscode-dropdown-foreground)',
-        fontFamily: 'var(--vscode-font-family)',
-        fontWeight: 'var(--vscode-font-weight)',
-        fontSize: 'var(--vscode-font-size)',
-        backgroundColor: 'var(--vscode-dropdown-background)',
-        opacity: '0.3'
+    caretDown: {
+        visibility: 'hidden' // Override the FluentUI caret and use ::after selector on the caretDownWrapper in order to match VS Code. See sliceControl.css
     }
 };
 
@@ -75,6 +32,8 @@ interface ISliceControlProps {
     loadingData: boolean;
     originalVariableShape: number[];
     sliceExpression: string | undefined;
+    onPanelToggled(): void;
+    onCheckboxToggled(newState: boolean): void;
     handleSliceRequest(slice: IGetSliceRequest): void;
 }
 
@@ -89,8 +48,12 @@ export class SliceControl extends React.Component<ISliceControlProps, ISliceCont
     constructor(props: ISliceControlProps) {
         super(props);
         const initialSlice = preselectedSliceExpression(this.props.originalVariableShape);
-        this.state = { isEnabled: false, inputValue: initialSlice, errorMessage: '' };
-
+        this.state = {
+            isEnabled: this.props.originalVariableShape.length > 2,
+            inputValue: initialSlice,
+            errorMessage: ''
+        };
+        this.applyInputBoxToDropdowns();
         this.handleChange = this.handleChange.bind(this);
         this.handleSubmit = this.handleSubmit.bind(this);
     }
@@ -99,8 +62,11 @@ export class SliceControl extends React.Component<ISliceControlProps, ISliceCont
         const isDisabled = !this.state.isEnabled || this.props.loadingData;
         return (
             <div className="control-container">
-                <details className="slicing-control">
-                    <summary className="slice-summary">
+                <details
+                    className="slicing-control"
+                    {...(this.props.originalVariableShape.length > 2 ? { open: true } : {})}
+                >
+                    <summary className="slice-summary" onClick={() => this.props.onPanelToggled()}>
                         <span className="slice-summary-detail">
                             {getLocString('DataScience.sliceSummaryTitle', 'SLICING')}
                         </span>
@@ -108,24 +74,25 @@ export class SliceControl extends React.Component<ISliceControlProps, ISliceCont
                     </summary>
                     <form onSubmit={this.handleSubmit} className="slice-form">
                         <div className="slice-enablement-checkbox-container">
-                            <input
-                                type="checkbox"
-                                id="slice-enablement-checkbox"
-                                className="slice-enablement-checkbox"
-                                onChange={this.toggleEnablement}
-                                disabled={this.props.loadingData}
-                            />
-                            <label htmlFor="slice-enablement-checkbox">
-                                {getLocString('DataScience.sliceData', 'Slice Data')}
-                            </label>
+                            <div className="slice-control-row">
+                                <div
+                                    role="checkbox"
+                                    className={`checkbox${this.state.isEnabled ? ' checked' : ''}`}
+                                    onClick={this.toggleEnablement}
+                                />
+                                <span className="checkbox-label" onClick={this.toggleEnablement}>
+                                    {getLocString('DataScience.sliceData', 'Slice Data')}
+                                </span>
+                            </div>
                         </div>
-                        <div className="slice-control-row" style={{ marginTop: '10px' }}>
+                        <div className="slice-control-row slice-form-container" style={{ marginTop: '10px' }}>
                             <div className="slice-control-column">
                                 <input
                                     value={this.state.inputValue}
                                     onChange={this.handleChange}
                                     className={this.state.errorMessage ? 'slice-data input-invalid' : 'slice-data'}
                                     autoComplete="on"
+                                    placeholder={preselectedSliceExpression(this.props.originalVariableShape)}
                                     disabled={isDisabled}
                                 />
                                 {this.state.errorMessage ? (
@@ -186,7 +153,7 @@ export class SliceControl extends React.Component<ISliceControlProps, ISliceCont
             const indexKey = this.state[`selectedIndex${i}`] as number;
 
             dropdowns.push(
-                <div className="slice-control-row">
+                <div className="slice-control-row slice-form-container">
                     <Dropdown
                         responsiveMode={ResponsiveMode.xxxLarge}
                         label={getLocString('DataScience.sliceDropdownAxisLabel', 'Axis')}
@@ -235,14 +202,15 @@ export class SliceControl extends React.Component<ISliceControlProps, ISliceCont
         if (willBeEnabled) {
             // Enabling slicing
             if (this.state.inputValue !== this.props.sliceExpression && this.state.inputValue !== fullSlice) {
-                this.props.handleSliceRequest({ slice: this.state.inputValue });
+                this.props.handleSliceRequest({ slice: this.state.inputValue, source: SliceOperationSource.Checkbox });
             }
         } else {
             // Disabling slicing
             if (this.state.inputValue !== fullSlice) {
-                this.props.handleSliceRequest({ slice: undefined });
+                this.props.handleSliceRequest({ slice: undefined, source: SliceOperationSource.Checkbox });
             }
         }
+        this.props.onCheckboxToggled(willBeEnabled);
         this.applyInputBoxToDropdowns();
         this.setState(newState);
     };
@@ -262,7 +230,8 @@ export class SliceControl extends React.Component<ISliceControlProps, ISliceCont
             // Update axis and index dropdown selections
             this.applyInputBoxToDropdowns();
             this.props.handleSliceRequest({
-                slice: this.state.inputValue
+                slice: this.state.inputValue,
+                source: SliceOperationSource.TextBox
             });
         }
     };
@@ -338,7 +307,7 @@ export class SliceControl extends React.Component<ISliceControlProps, ISliceCont
                 newSliceExpression !== fullSlice
             ) {
                 this.setState({ inputValue: newSliceExpression });
-                this.props.handleSliceRequest({ slice: newSliceExpression });
+                this.props.handleSliceRequest({ slice: newSliceExpression, source: SliceOperationSource.Dropdown });
             }
         });
     };

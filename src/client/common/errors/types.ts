@@ -22,6 +22,27 @@ export class WrappedError extends BaseError {
             this.stack = `${new Error('').stack}${EOL}${EOL}${originalException.stack}`;
         }
     }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    public static from(message: string, err: any) {
+        if (err instanceof BaseError) {
+            return err;
+        } else {
+            return new WrappedError(message, err);
+        }
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    public static unwrap(err: any) {
+        if (!err) {
+            return err;
+        }
+        // Unwrap the errors.
+        if (err instanceof WrappedError && err.originalException && err.originalException instanceof BaseError) {
+            err = err.originalException;
+        }
+        return err;
+    }
 }
 
 export function getErrorCategory(error?: Error): ErrorCategory {
@@ -47,7 +68,9 @@ export type ErrorCategory =
     | 'noipykernel'
     | 'fetcherror'
     | 'notinstalled'
-    | 'kernelspecnotfound'
+    | 'kernelspecnotfound' // Left for historical purposes, not used anymore.
+    | 'unsupportedKernelSpec' // Left for historical purposes, not used anymore.
+    | 'sessionDisposed'
     | 'unknown';
 
 // If there are errors, then the are added to the telementry properties.

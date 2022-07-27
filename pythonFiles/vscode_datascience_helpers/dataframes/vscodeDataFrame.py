@@ -91,25 +91,31 @@ def _VSCODE_convertTensorToDataFrame(tensor, start=None, end=None):
 def _VSCODE_convertToDataFrame(df, start=None, end=None):
     vartype = type(df)
     if isinstance(df, list):
-        df = _VSCODE_pd.DataFrame(df)
+        df = _VSCODE_pd.DataFrame(df).iloc[start:end]
     elif isinstance(df, _VSCODE_pd.Series):
-        df = _VSCODE_pd.Series.to_frame(df)
+        df = _VSCODE_pd.Series.to_frame(df).iloc[start:end]
     elif isinstance(df, dict):
         df = _VSCODE_pd.Series(df)
-        df = _VSCODE_pd.Series.to_frame(df)
+        df = _VSCODE_pd.Series.to_frame(df).iloc[start:end]
     elif hasattr(df, "toPandas"):
-        df = df.toPandas()
+        df = df.toPandas().iloc[start:end]
     elif (
         hasattr(vartype, "__name__") and vartype.__name__ in _VSCODE_allowedTensorTypes
     ):
         df = _VSCODE_convertTensorToDataFrame(df, start, end)
     elif hasattr(vartype, "__name__") and vartype.__name__ == "ndarray":
         df = _VSCODE_convertNumpyArrayToDataFrame(df, start, end)
+    elif (
+        hasattr(df, "__array__")
+        and hasattr(vartype, "__name__")
+        and vartype.__name__ == "DataArray"
+    ):
+        df = _VSCODE_convertNumpyArrayToDataFrame(df[start:end].__array__(), start, end)
     else:
         """Disabling bandit warning for try, except, pass. We want to swallow all exceptions here to not crash on
         variable fetching"""
         try:
-            temp = _VSCODE_pd.DataFrame(df)
+            temp = _VSCODE_pd.DataFrame(df).iloc[start:end]
             df = temp
         except:  # nosec
             pass
@@ -170,6 +176,17 @@ def _VSCODE_getDataFrameInfo(df):
 
     columnTypes = _VSCODE_builtins.list(df.dtypes)
 
+    # Compute the index column. It may have been renamed
+    try:
+        indexColumn = df.index.name if df.index.name else "index"
+    except AttributeError:
+        indexColumn = "index"
+
+    # Make sure the index column exists
+    if indexColumn not in columnNames:
+        columnNames.insert(0, indexColumn)
+        columnTypes.insert(0, "int64")
+
     # Then loop and generate our output json
     columns = []
     for n in _VSCODE_builtins.range(0, _VSCODE_builtins.len(columnNames)):
@@ -184,6 +201,7 @@ def _VSCODE_getDataFrameInfo(df):
     # Save this in our target
     target = {}
     target["columns"] = columns
+    target["indexColumn"] = indexColumn
     target["rowCount"] = rowCount
 
     # return our json object as a string

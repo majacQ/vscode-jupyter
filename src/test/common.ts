@@ -8,14 +8,16 @@ import * as assert from 'assert';
 import * as fs from 'fs-extra';
 import * as glob from 'glob';
 import * as path from 'path';
+import * as uuid from 'uuid/v4';
 import { coerce, SemVer } from 'semver';
-import { ConfigurationTarget, Event, TextDocument, Uri } from 'vscode';
+import type { ConfigurationTarget, Event, TextDocument, Uri } from 'vscode';
 import { IExtensionApi } from '../client/api';
 import { IProcessService } from '../client/common/process/types';
 import { IDisposable, IJupyterSettings } from '../client/common/types';
 import { IServiceContainer, IServiceManager } from '../client/ioc/types';
 import { EXTENSION_ROOT_DIR_FOR_TESTS, IS_MULTI_ROOT_TEST, IS_PERF_TEST, IS_SMOKE_TEST } from './constants';
 import { noop, sleep } from './core';
+import { isCI } from '../client/common/constants';
 
 const StreamZip = require('node-stream-zip');
 
@@ -137,6 +139,11 @@ async function setGlobalPathToInterpreter(pythonPath?: string): Promise<void> {
     await pythonConfig.update('defaultInterpreterPath', pythonPath, true);
     await disposePythonSettings();
 }
+export async function adjustSettingsInPythonExtension(): Promise<void> {
+    const vscode = require('vscode') as typeof import('vscode');
+    const pythonConfig = vscode.workspace.getConfiguration('python', (null as any) as Uri);
+    await pythonConfig.update('experiments.enabled', 'true', vscode.ConfigurationTarget.Global).then(noop, noop);
+}
 export const resetGlobalPythonPathSetting = async () => retryAsync(restoreGlobalPythonPathSetting)();
 
 export async function setAutoSaveDelayInWorkspaceRoot(delayinMS: number) {
@@ -215,8 +222,9 @@ async function setPythonPathInWorkspace(
     const value = settings.inspect<string>('pythonPath');
     const prop: 'workspaceFolderValue' | 'workspaceValue' =
         config === vscode.ConfigurationTarget.Workspace ? 'workspaceValue' : 'workspaceFolderValue';
-    if (value && value[prop] !== pythonPath) {
+    if (!value || value[prop] !== pythonPath) {
         await settings.update('pythonPath', pythonPath, config).then(noop, noop);
+        await settings.update('defaultInterpreterPath', pythonPath, config).then(noop, noop);
         if (config === vscode.ConfigurationTarget.Global) {
             await settings.update('defaultInterpreterPath', pythonPath, config).then(noop, noop);
         }
@@ -506,24 +514,41 @@ export function clearPendingTimers() {
 export async function waitForCondition(
     condition: () => Promise<boolean>,
     timeoutMs: number,
-    errorMessage: string
+    errorMessage: string | (() => string),
+    intervalTimeoutMs: number = 10,
+    throwOnError: boolean = false
 ): Promise<void> {
     return new Promise<void>(async (resolve, reject) => {
         const timeout = setTimeout(() => {
             clearTimeout(timeout);
             // eslint-disable-next-line @typescript-eslint/no-use-before-define
-            clearInterval(timer);
+            clearTimeout(timer);
+            errorMessage = typeof errorMessage === 'string' ? errorMessage : errorMessage();
             console.log(`Test failing --- ${errorMessage}`);
             reject(new Error(errorMessage));
         }, timeoutMs);
-        const timer = setInterval(async () => {
-            if (!(await condition().catch(() => false))) {
-                return;
+        let timer: NodeJS.Timer;
+        const timerFunc = async () => {
+            let success = false;
+            try {
+                success = await condition();
+            } catch (exc) {
+                if (throwOnError) {
+                    reject(exc);
+                }
             }
-            clearTimeout(timeout);
-            clearInterval(timer);
-            resolve();
-        }, 10);
+            if (!success) {
+                // Start up a timer again, but don't do it until after
+                // the condition is false.
+                timer = setTimeout(timerFunc, intervalTimeoutMs);
+            } else {
+                clearTimeout(timer);
+                clearTimeout(timeout);
+                resolve();
+            }
+        };
+        timer = setTimeout(timerFunc, intervalTimeoutMs);
+
         pendingTimers.push(timer);
         pendingTimers.push(timeout);
     });
@@ -542,7 +567,7 @@ export async function retryIfFail<T>(fn: () => Promise<T>, timeoutMs: number = 6
             // Capture result, if no exceptions return that.
             return result;
         } catch (ex) {
-            lastEx = ex;
+            lastEx = ex as any;
         }
         await sleep(10);
     }
@@ -722,5 +747,24 @@ export function arePathsSame(path1: string, path2: string) {
         return path1.toLowerCase() === path2.toLowerCase();
     } else {
         return path1 === path2;
+    }
+}
+
+/**
+ * Captures screenshots (png format) & dumpts into root directory (only on CI).
+ * If there's a failure, it will be logged (errors are swallowed).
+ */
+export async function captureScreenShot(fileNamePrefix: string) {
+    if (!isCI) {
+        return;
+    }
+    const name = `${fileNamePrefix}_${uuid()}`.replace(/[\W]+/g, '_');
+    const filename = path.join(EXTENSION_ROOT_DIR_FOR_TESTS, `${name}-screenshot.png`);
+    try {
+        const screenshot = require('screenshot-desktop');
+        await screenshot({ filename });
+        console.info(`Screenshot captured into ${filename}`);
+    } catch (ex) {
+        console.error(`Failed to capture screenshot into ${filename}`, ex);
     }
 }

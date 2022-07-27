@@ -4,15 +4,16 @@
 'use strict';
 import type * as jupyterlabService from '@jupyterlab/services';
 import { sha256 } from 'hash.js';
-import { IDisposable } from 'monaco-editor';
 import * as path from 'path';
-import { Event, EventEmitter, Uri } from 'vscode';
+import { Event, EventEmitter, NotebookDocument, Uri } from 'vscode';
 import { IApplicationShell, IWorkspaceService } from '../../common/application/types';
 import { traceError, traceInfo } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
+import { IPythonExecutionFactory } from '../../common/process/types';
 
 import {
     IConfigurationService,
+    IDisposable,
     IDisposableRegistry,
     IExtensionContext,
     IHttpClient,
@@ -21,11 +22,12 @@ import {
 import { createDeferred, Deferred } from '../../common/utils/async';
 import { getOSType, OSType } from '../../common/utils/platform';
 import { IInterpreterService } from '../../interpreter/contracts';
-import { PythonEnvironment } from '../../pythonEnvironments/info';
+import { ConsoleForegroundColors } from '../../logging/_global';
 import { sendTelemetryEvent } from '../../telemetry';
 import { Telemetry } from '../constants';
 import { InteractiveWindowMessages, IPyWidgetMessages } from '../interactive-common/interactiveWindowTypes';
-import { ILocalResourceUriConverter, INotebook, INotebookProvider } from '../types';
+import { IKernel, IKernelProvider } from '../jupyter/kernels/types';
+import { ILocalResourceUriConverter } from '../types';
 import { IPyWidgetScriptSourceProvider } from './ipyWidgetScriptSourceProvider';
 import { WidgetScriptSource } from './types';
 /* eslint-disable @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports */
@@ -36,11 +38,6 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
     public get postMessage(): Event<{ message: string; payload: any }> {
         return this.postEmitter.event;
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    public get postInternalMessage(): Event<{ message: string; payload: any }> {
-        return this.postInternalMessageEmitter.event;
-    }
-
     public get rootScriptFolder(): Uri {
         return Uri.file(this._rootScriptFolder);
     }
@@ -50,16 +47,10 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         payload: any;
     }>();
-    private postInternalMessageEmitter = new EventEmitter<{
-        message: string;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        payload: any;
-    }>();
-    private notebook?: INotebook;
+    private kernel?: IKernel;
     private jupyterLab?: typeof jupyterlabService;
     private scriptProvider?: IPyWidgetScriptSourceProvider;
     private disposables: IDisposable[] = [];
-    private interpreterForWhichWidgetSourcesWereFetched?: PythonEnvironment;
     /**
      * Key value pair of widget modules along with the version that needs to be loaded.
      */
@@ -69,8 +60,8 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
     private readonly _rootScriptFolder: string;
     private readonly createTargetWidgetScriptsFolder: Promise<string>;
     constructor(
-        private readonly identity: Uri,
-        private readonly notebookProvider: INotebookProvider,
+        private readonly document: NotebookDocument,
+        private readonly kernelProvider: IKernelProvider,
         disposables: IDisposableRegistry,
         private readonly fs: IFileSystem,
         private readonly interpreterService: IInterpreterService,
@@ -79,7 +70,8 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
         private readonly appShell: IApplicationShell,
         private readonly workspaceService: IWorkspaceService,
         private readonly stateFactory: IPersistentStateFactory,
-        extensionContext: IExtensionContext
+        extensionContext: IExtensionContext,
+        private readonly factory: IPythonExecutionFactory
     ) {
         this._rootScriptFolder = path.join(extensionContext.extensionPath, 'tmp', 'scripts');
         this.targetWidgetScriptsFolder = path.join(this._rootScriptFolder, 'nbextensions');
@@ -92,9 +84,9 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
                 return this.targetWidgetScriptsFolder;
             });
         disposables.push(this);
-        this.notebookProvider.onNotebookCreated(
+        this.kernelProvider.onDidStartKernel(
             (e) => {
-                if (e.identity.toString() === this.identity.toString()) {
+                if (e.notebookDocument === this.document) {
                     this.initialize().catch(traceError.bind('Failed to initialize'));
                 }
             },
@@ -113,7 +105,7 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
     public async asWebviewUri(localResource: Uri): Promise<Uri> {
         // Make a copy of the local file if not already in the correct location
         if (!this.isInScriptPath(localResource.fsPath)) {
-            if (this.identity && !this.resourcesMappedToExtensionFolder.has(localResource.fsPath)) {
+            if (this.document && !this.resourcesMappedToExtensionFolder.has(localResource.fsPath)) {
                 const deferred = createDeferred<Uri>();
                 this.resourcesMappedToExtensionFolder.set(localResource.fsPath, deferred.promise);
                 try {
@@ -143,7 +135,7 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
         if (!this.uriConversionPromises.has(key)) {
             this.uriConversionPromises.set(key, createDeferred<Uri>());
             // Send a request for the translation.
-            this.postInternalMessageEmitter.fire({
+            this.postEmitter.fire({
                 message: InteractiveWindowMessages.ConvertUriForUseInWebViewRequest,
                 payload: localResource
             });
@@ -167,8 +159,9 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
         } else if (message === IPyWidgetMessages.IPyWidgets_WidgetScriptSourceRequest) {
             if (payload) {
                 const { moduleName, moduleVersion } = payload as { moduleName: string; moduleVersion: string };
+                traceInfo(`${ConsoleForegroundColors.Green}Fetch Script for ${JSON.stringify(payload)}`);
                 this.sendWidgetSource(moduleName, moduleVersion).catch(
-                    traceError.bind('Failed to send widget sources upon ready')
+                    traceError.bind(undefined, 'Failed to send widget sources upon ready')
                 );
             }
         }
@@ -180,22 +173,17 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
             this.jupyterLab = require('@jupyterlab/services') as typeof jupyterlabService; // NOSONAR
         }
 
-        if (!this.notebook) {
-            this.notebook = await this.notebookProvider.getOrCreateNotebook({
-                identity: this.identity,
-                resource: this.identity,
-                disableUI: true,
-                getOnly: true
-            });
+        if (!this.kernel) {
+            this.kernel = await this.kernelProvider.get(this.document);
         }
-        if (!this.notebook) {
+        if (!this.kernel) {
             return;
         }
         if (this.scriptProvider) {
             return;
         }
         this.scriptProvider = new IPyWidgetScriptSourceProvider(
-            this.notebook,
+            this.kernel,
             this,
             this.fs,
             this.interpreterService,
@@ -203,9 +191,11 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
             this.configurationSettings,
             this.workspaceService,
             this.stateFactory,
-            this.httpClient
+            this.httpClient,
+            this.factory
         );
-        await this.initializeNotebook();
+        this.initializeNotebook();
+        traceInfo('IPyWidgetScriptSource.initialize');
     }
 
     /**
@@ -217,18 +207,22 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
         if (!moduleName || moduleName.startsWith('@jupyter')) {
             return;
         }
-        if (!this.notebook || !this.scriptProvider) {
+        if (!this.kernel || !this.scriptProvider) {
             this.pendingModuleRequests.set(moduleName, moduleVersion);
             return;
         }
 
         let widgetSource: WidgetScriptSource = { moduleName };
         try {
+            traceInfo(`${ConsoleForegroundColors.Green}Fetch Script for ${moduleName}`);
             widgetSource = await this.scriptProvider.getWidgetScriptSource(moduleName, moduleVersion);
         } catch (ex) {
             traceError('Failed to get widget source due to an error', ex);
             sendTelemetryEvent(Telemetry.HashedIPyWidgetScriptDiscoveryError);
         } finally {
+            traceInfo(
+                `${ConsoleForegroundColors.Green}Script for ${moduleName}, is ${widgetSource.scriptUri} from ${widgetSource.source}`
+            );
             // Send to UI (even if there's an error) continues instead of hanging while waiting for a response.
             this.postEmitter.fire({
                 message: IPyWidgetMessages.IPyWidgets_WidgetScriptSourceResponse,
@@ -236,28 +230,11 @@ export class IPyWidgetScriptSource implements ILocalResourceUriConverter {
             });
         }
     }
-    private async initializeNotebook() {
-        if (!this.notebook) {
+    private initializeNotebook() {
+        if (!this.kernel) {
             return;
         }
-        this.notebook.onDisposed(() => this.dispose());
-        // When changing a kernel, we might have a new interpreter.
-        this.notebook.onKernelChanged(
-            () => {
-                // If underlying interpreter has changed, then refresh list of widget sources.
-                // After all, different kernels have different widgets.
-                if (
-                    this.notebook?.getMatchingInterpreter() &&
-                    this.notebook?.getMatchingInterpreter() === this.interpreterForWhichWidgetSourcesWereFetched
-                ) {
-                    return;
-                }
-                // Let UI know that kernel has changed.
-                this.postEmitter.fire({ message: IPyWidgetMessages.IPyWidgets_onKernelChanged, payload: undefined });
-            },
-            this,
-            this.disposables
-        );
+        this.kernel.onDisposed(() => this.dispose());
         this.handlePendingRequests();
     }
     private handlePendingRequests() {

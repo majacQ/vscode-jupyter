@@ -3,24 +3,27 @@
 'use strict';
 
 import { ChildProcess } from 'child_process';
+import { kill } from 'process';
 import * as fs from 'fs-extra';
-import * as tcpPortUsed from 'tcp-port-used';
 import * as tmp from 'tmp';
 import { CancellationToken, Event, EventEmitter } from 'vscode';
 import { IPythonExtensionChecker } from '../../api/types';
 import { createPromiseFromCancellation } from '../../common/cancellation';
-import { getErrorMessageFromPythonTraceback } from '../../common/errors/errorUtils';
-import { traceDecorators, traceError, traceInfo, traceWarning } from '../../common/logger';
+import {
+    getErrorMessageFromPythonTraceback,
+    getTelemetrySafeErrorMessageFromPythonTraceback
+} from '../../common/errors/errorUtils';
+import { traceDecorators, traceError, traceInfo, traceVerbose, traceWarning } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
-import { IProcessServiceFactory, ObservableExecutionResult } from '../../common/process/types';
+import { IProcessServiceFactory, IPythonExecutionFactory, ObservableExecutionResult } from '../../common/process/types';
 import { Resource } from '../../common/types';
-import { createDeferred, TimedOutError } from '../../common/utils/async';
+import { createDeferred } from '../../common/utils/async';
 import * as localize from '../../common/utils/localize';
 import { noop, swallowExceptions } from '../../common/utils/misc';
 import { captureTelemetry } from '../../telemetry';
-import { Commands, Telemetry } from '../constants';
+import { Telemetry } from '../constants';
 import {
-    createDefaultKernelSpec,
+    connectionFilePlaceholder,
     findIndexOfConnectionFile,
     isPythonKernelConnection
 } from '../jupyter/kernels/helpers';
@@ -29,14 +32,12 @@ import { IJupyterKernelSpec } from '../types';
 import { KernelDaemonPool } from './kernelDaemonPool';
 import { KernelEnvironmentVariablesService } from './kernelEnvVarsService';
 import { PythonKernelLauncherDaemon } from './kernelLauncherDaemon';
-import {
-    IKernelConnection,
-    IKernelProcess,
-    IPythonKernelDaemon,
-    KernelDiedError,
-    KernelProcessExited,
-    PythonKernelDiedError
-} from './types';
+import { IKernelConnection, IKernelProcess, IPythonKernelDaemon } from './types';
+import { BaseError } from '../../common/errors/types';
+import { KernelProcessExitedError } from '../errors/kernelProcessExitedError';
+import { PythonKernelDiedError } from '../errors/pythonKernelDiedError';
+import { KernelDiedError } from '../errors/kernelDiedError';
+import { KernelPortNotUsedTimeoutError } from '../errors/kernelPortNotUsedTimeoutError';
 
 // Launches and disposes a kernel process given a kernelspec and a resource or python interpreter.
 // Exposes connection information and the process itself.
@@ -53,12 +54,21 @@ export class KernelProcess implements IKernelProcess {
     private get isPythonKernel(): boolean {
         return isPythonKernelConnection(this.kernelConnectionMetadata);
     }
+    public get canInterrupt() {
+        if (this.pythonDaemon) {
+            return true;
+        }
+        if (this._kernelConnectionMetadata.kernelSpec.interrupt_mode === 'message') {
+            return false;
+        }
+        return true;
+    }
     private _process?: ChildProcess;
     private exitEvent = new EventEmitter<{ exitCode?: number; reason?: string }>();
     private pythonKernelLauncher?: PythonKernelLauncherDaemon;
     private launchedOnce?: boolean;
     private disposed?: boolean;
-    private kernelDaemon?: IPythonKernelDaemon;
+    private pythonDaemon?: IPythonKernelDaemon;
     private connectionFile?: string;
     private _launchKernelSpec?: IJupyterKernelSpec;
     private readonly _kernelConnectionMetadata: Readonly<KernelSpecConnectionMetadata | PythonKernelConnectionMetadata>;
@@ -70,13 +80,23 @@ export class KernelProcess implements IKernelProcess {
         private readonly fileSystem: IFileSystem,
         private readonly resource: Resource,
         private readonly extensionChecker: IPythonExtensionChecker,
-        private readonly kernelEnvVarsService: KernelEnvironmentVariablesService
+        private readonly kernelEnvVarsService: KernelEnvironmentVariablesService,
+        private readonly pythonExecFactory: IPythonExecutionFactory
     ) {
         this._kernelConnectionMetadata = kernelConnectionMetadata;
     }
     public async interrupt(): Promise<void> {
-        if (this.kernelDaemon) {
-            await this.kernelDaemon?.interrupt();
+        if (!this.canInterrupt) {
+            throw new Error('Kernel interrupt not supported in KernelProcess.ts');
+        }
+        if (this.pythonDaemon) {
+            traceInfo('Interrupting kernel via Daemon message');
+            await this.pythonDaemon.interrupt();
+        } else if (this._kernelConnectionMetadata.kernelSpec.interrupt_mode !== 'message' && this._process) {
+            traceInfo('Interrupting kernel via Signals');
+            kill(this._process.pid, 'SIGINT');
+        } else {
+            traceError('No process to interrupt in KernleProcess.ts');
         }
     }
 
@@ -107,20 +127,26 @@ export class KernelProcess implements IKernelProcess {
             if (!exitEventFired) {
                 this.exitEvent.fire({
                     exitCode: exitCode || undefined,
-                    reason: getErrorMessageFromPythonTraceback(stderrProc) || stderrProc
+                    reason: getTelemetrySafeErrorMessageFromPythonTraceback(stderrProc) || stderrProc
                 });
                 exitEventFired = true;
             }
-            deferred.reject(new KernelProcessExited(exitCode || -1));
+            deferred.reject(new KernelProcessExitedError(exitCode || -1, stderr));
         });
 
-        exeObs.proc!.stdout.on('data', (data: Buffer | string) => {
-            traceInfo(`KernelProcess output: ${(data || '').toString()}`);
+        exeObs.proc!.stdout?.on('data', (data: Buffer | string) => {
+            // We get these from execObs.out.subscribe.
+            // Hence log only using traceLevel = verbose.
+            // But only useful if daemon doesn't start for any reason.
+            traceVerbose(`KernelProcess output: ${(data || '').toString()}`);
         });
 
-        exeObs.proc!.stderr.on('data', (data: Buffer | string) => {
+        exeObs.proc!.stderr?.on('data', (data: Buffer | string) => {
+            // We get these from execObs.out.subscribe.
+            // Hence log only using traceLevel = verbose.
+            // But only useful if daemon doesn't start for any reason.
             stderrProc += data.toString();
-            traceInfo(`KernelProcess error: ${(data || '').toString()}`);
+            traceVerbose(`KernelProcess error: ${(data || '').toString()}`);
         });
 
         exeObs.out.subscribe(
@@ -156,7 +182,7 @@ export class KernelProcess implements IKernelProcess {
                         let reason = error.reason || error.message;
                         this.exitEvent.fire({
                             exitCode: error.exitCode,
-                            reason: getErrorMessageFromPythonTraceback(reason) || reason
+                            reason: getTelemetrySafeErrorMessageFromPythonTraceback(reason)
                         });
                         exitEventFired = true;
                     }
@@ -170,39 +196,50 @@ export class KernelProcess implements IKernelProcess {
 
         // Don't return until our heartbeat channel is open for connections or the kernel died or we timed out
         try {
+            const tcpPortUsed = require('tcp-port-used') as typeof import('tcp-port-used');
+            // Wait on shell port as this is used for communications (hence shell port is guaranteed to be used, where as heart beat isn't).
+            // Wait for shell & iopub to be used (iopub is where we get a response & this is similar to what Jupyter does today).
+            // Kernel must be connected to bo Shell & IoPub channels for kernel communication to work.
+            const portsUsed = Promise.all([
+                tcpPortUsed.waitUntilUsed(this.connection.shell_port, 200, timeout),
+                tcpPortUsed.waitUntilUsed(this.connection.iopub_port, 200, timeout)
+            ]).catch((ex) => {
+                traceError(`waitUntilUsed timed out`, ex);
+                // Throw an error we recognize.
+                return Promise.reject(new KernelPortNotUsedTimeoutError(this.kernelConnectionMetadata));
+            });
             await Promise.race([
-                tcpPortUsed.waitUntilUsed(this.connection.hb_port, 200, timeout),
+                portsUsed,
                 deferred.promise,
                 createPromiseFromCancellation({
                     token: cancelToken,
-                    cancelAction: 'reject',
-                    defaultValue: undefined
+                    cancelAction: 'reject'
                 })
             ]);
         } catch (e) {
             traceError('Disposing kernel process due to an error', e);
-            // Make sure to dispose if we never get a heartbeat
-            this.dispose().ignoreErrors();
+            traceError(stderrProc || stderr);
+            // Make sure to dispose if we never connect.
+            void this.dispose();
 
-            if (
-                cancelToken?.isCancellationRequested ||
-                e instanceof KernelProcessExited ||
-                e instanceof PythonKernelDiedError
-            ) {
-                traceError(stderrProc || stderr);
-                // If we have the python error message, display that.
+            if (!cancelToken?.isCancellationRequested && e instanceof BaseError) {
+                throw e;
+            } else {
+                // Possible this isn't an error we recognize, hence wrap it in a user friendly message.
+                if (cancelToken?.isCancellationRequested) {
+                    traceWarning('User cancelled the kernel launch');
+                }
+                // If we have the python error message in std outputs, display that.
                 const errorMessage =
                     getErrorMessageFromPythonTraceback(stderrProc || stderr) ||
                     (stderrProc || stderr).substring(0, 100);
                 throw new KernelDiedError(
-                    localize.DataScience.kernelDied().format(Commands.ViewJupyterOutput, errorMessage),
+                    localize.DataScience.kernelDied().format(errorMessage),
                     // Include what ever we have as the stderr.
                     stderrProc + '\n' + stderr + '\n',
-                    e
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    e as any
                 );
-            } else {
-                traceError('Timed out waiting to get a heartbeat from kernel process.');
-                throw new TimedOutError(localize.DataScience.kernelTimeout().format(Commands.ViewJupyterOutput));
             }
         }
     }
@@ -213,9 +250,9 @@ export class KernelProcess implements IKernelProcess {
             return;
         }
         this.disposed = true;
-        if (this.kernelDaemon) {
-            await this.kernelDaemon.kill().catch(noop);
-            swallowExceptions(() => this.kernelDaemon?.dispose());
+        if (this.pythonDaemon) {
+            await this.pythonDaemon.kill().catch(noop);
+            swallowExceptions(() => this.pythonDaemon?.dispose());
         }
         swallowExceptions(() => {
             this._process?.kill(); // NOSONAR
@@ -231,16 +268,6 @@ export class KernelProcess implements IKernelProcess {
         }
 
         let kernelSpec = this._kernelConnectionMetadata.kernelSpec;
-        // If there is no kernelspec & when launching a Python process, generate a dummy `kernelSpec`
-        if (!kernelSpec && this._kernelConnectionMetadata.kind === 'startUsingPythonInterpreter') {
-            traceInfo(
-                `Creating a default kernel spec for use with interpreter ${this._kernelConnectionMetadata.interpreter.displayName} # ${this._kernelConnectionMetadata.interpreter.path}`
-            );
-            kernelSpec = createDefaultKernelSpec(this._kernelConnectionMetadata.interpreter);
-            traceInfo(
-                `Created a default kernel spec for use with interpreter ${kernelSpec.display_name} # ${kernelSpec.interpreterPath}`
-            );
-        }
         // We always expect a kernel spec.
         if (!kernelSpec) {
             throw new Error('KernelSpec cannot be empty in KernelProcess.ts');
@@ -295,10 +322,26 @@ export class KernelProcess implements IKernelProcess {
             const tempFile = await this.fileSystem.createTemporaryLocalFile('.json');
             this.connectionFile = tempFile.filePath;
             await tempFile.dispose();
-            await fs.writeFile(this.connectionFile, JSON.stringify(this._connection));
+            await this.fileSystem.writeLocalFile(this.connectionFile, JSON.stringify(this._connection));
 
             // Then replace the connection file argument with this file
-            this.launchKernelSpec.argv[indexOfConnectionFile] = this.connectionFile;
+            // Remmeber, non-python kernels can have argv as `--connection-file={connection_file}`,
+            // hence we should not replace the entire entry, but just replace the text `{connection_file}`
+            // See https://github.com/microsoft/vscode-jupyter/issues/7203
+            if (this.launchKernelSpec.argv[indexOfConnectionFile].includes('--connection-file')) {
+                const connectionFile = this.connectionFile.includes(' ')
+                    ? `"${this.connectionFile}"` // Quoted for spaces in file paths.
+                    : this.connectionFile;
+                this.launchKernelSpec.argv[indexOfConnectionFile] = this.launchKernelSpec.argv[
+                    indexOfConnectionFile
+                ].replace(connectionFilePlaceholder, connectionFile);
+            } else {
+                // Even though we don't have `--connection-file` don't assume it won't be `--config-file` for other kernels.
+                // E.g. in Python the name of the argument is `-f` and in.
+                this.launchKernelSpec.argv[indexOfConnectionFile] = this.launchKernelSpec.argv[
+                    indexOfConnectionFile
+                ].replace(connectionFilePlaceholder, this.connectionFile);
+            }
         }
     }
 
@@ -336,7 +379,11 @@ export class KernelProcess implements IKernelProcess {
 
         // Use a daemon only if the python extension is available. It requires the active interpreter
         if (this.isPythonKernel && this.extensionChecker.isPythonExtensionInstalled) {
-            this.pythonKernelLauncher = new PythonKernelLauncherDaemon(this.daemonPool, this.kernelEnvVarsService);
+            this.pythonKernelLauncher = new PythonKernelLauncherDaemon(
+                this.daemonPool,
+                this.pythonExecFactory,
+                this.kernelEnvVarsService
+            );
             const kernelDaemonLaunch = await this.pythonKernelLauncher.launch(
                 this.resource,
                 workingDirectory,
@@ -344,7 +391,7 @@ export class KernelProcess implements IKernelProcess {
                 this._kernelConnectionMetadata.interpreter
             );
 
-            this.kernelDaemon = kernelDaemonLaunch.daemon;
+            this.pythonDaemon = kernelDaemonLaunch.daemon;
             exeObs = kernelDaemonLaunch.observableOutput;
         }
 
@@ -355,9 +402,27 @@ export class KernelProcess implements IKernelProcess {
             traceInfo(`Launching Raw Kernel & not daemon ${this.launchKernelSpec.display_name} # ${executable}`);
             const [executionService, env] = await Promise.all([
                 this.processExecutionFactory.create(this.resource),
-                this.kernelEnvVarsService.getEnvironmentVariables(this.resource, this.launchKernelSpec)
+                // Pass undefined for the interpreter here as we are not explicitly launching with a Python Environment
+                // Note that there might still be python env vars to merge from the kernel spec in the case of something like
+                // a Java kernel registered in a conda environment
+                this.kernelEnvVarsService.getEnvironmentVariables(this.resource, undefined, this.launchKernelSpec)
             ]);
-            exeObs = executionService.execObservable(executable, this.launchKernelSpec.argv.slice(1), {
+
+            // Add quotations to arguments if they have a blank space in them.
+            // This will mainly quote paths so that they can run, other arguments shouldn't be quoted or it may cause errors.
+            // The first argument is sliced because it is the executable command.
+            const args = this.launchKernelSpec.argv.slice(1).map((a) => {
+                // Some kernel specs (non-python) can have argv as `--connection-file={connection_file}`
+                // The `connection-file` will be quoted when we update it with the real path.
+                if (a.includes('--connection-file')) {
+                    return a;
+                }
+                if (a.includes(' ')) {
+                    return `"${a}"`;
+                }
+                return a;
+            });
+            exeObs = executionService.execObservable(executable, args, {
                 env,
                 cwd: workingDirectory
             });

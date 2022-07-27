@@ -14,20 +14,19 @@ import { IPythonExtensionChecker } from '../../api/types';
 import { isTestExecution } from '../../common/constants';
 import { traceInfo } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
-import { IProcessServiceFactory } from '../../common/process/types';
-import { Resource } from '../../common/types';
-import { PythonEnvironment } from '../../pythonEnvironments/info';
+import { IProcessServiceFactory, IPythonExecutionFactory } from '../../common/process/types';
+import { IDisposableRegistry, Resource } from '../../common/types';
 import { Telemetry } from '../constants';
 import { KernelSpecConnectionMetadata, PythonKernelConnectionMetadata } from '../jupyter/kernels/types';
-import { IKernelDependencyService, KernelInterpreterDependencyResponse } from '../types';
+import { IKernelDependencyService } from '../types';
 import { KernelDaemonPool } from './kernelDaemonPool';
 import { KernelEnvironmentVariablesService } from './kernelEnvVarsService';
 import { KernelProcess } from './kernelProcess';
-import { IKernelConnection, IKernelLauncher, IKernelProcess, IpyKernelNotInstalledError } from './types';
-import * as localize from '../../common/utils/localize';
-import { createDeferredFromPromise, Deferred } from '../../common/utils/async';
-import { CancellationError } from '../../common/cancellation';
+import { IKernelConnection, IKernelLauncher, IKernelProcess } from './types';
+import { CancellationError, createPromiseFromCancellation } from '../../common/cancellation';
 import { sendKernelTelemetryWhenDone } from '../telemetry/telemetry';
+import { sendTelemetryEvent } from '../../telemetry';
+import { getTelemetrySafeErrorMessageFromPythonTraceback } from '../../common/errors/errorUtils';
 
 const PortFormatString = `kernelLauncherPortStart_{0}.tmp`;
 // Launches and returns a kernel process given a resource or python interpreter.
@@ -36,10 +35,12 @@ const PortFormatString = `kernelLauncherPortStart_{0}.tmp`;
 @injectable()
 export class KernelLauncher implements IKernelLauncher {
     private static startPortPromise = KernelLauncher.computeStartPort();
-    private static usedPorts = new Set<number>();
+    private static _usedPorts = new Set<number>();
     private static getPorts = promisify(portfinder.getPorts);
-    private dependencyPromises = new Map<string, Deferred<KernelInterpreterDependencyResponse>>();
     private portChain: Promise<number[]> | undefined;
+    public static get usedPorts(): number[] {
+        return Array.from(KernelLauncher._usedPorts);
+    }
     constructor(
         @inject(IProcessServiceFactory) private processExecutionFactory: IProcessServiceFactory,
         @inject(IFileSystem) private readonly fs: IFileSystem,
@@ -47,7 +48,9 @@ export class KernelLauncher implements IKernelLauncher {
         @inject(IPythonExtensionChecker) private readonly extensionChecker: IPythonExtensionChecker,
         @inject(KernelEnvironmentVariablesService)
         private readonly kernelEnvVarsService: KernelEnvironmentVariablesService,
-        @inject(IKernelDependencyService) private readonly kernelDependencyService: IKernelDependencyService
+        @inject(IKernelDependencyService) private readonly kernelDependencyService: IKernelDependencyService,
+        @inject(IDisposableRegistry) private readonly disposables: IDisposableRegistry,
+        @inject(IPythonExecutionFactory) private readonly pythonExecFactory: IPythonExecutionFactory
     ) {}
 
     public static async cleanupStartPort() {
@@ -101,11 +104,15 @@ export class KernelLauncher implements IKernelLauncher {
         const promise = (async () => {
             // If this is a python interpreter, make sure it has ipykernel
             if (kernelConnectionMetadata.interpreter) {
-                await this.installDependenciesIntoInterpreter(
+                await this.kernelDependencyService.installMissingDependencies(
+                    resource,
                     kernelConnectionMetadata.interpreter,
                     cancelToken,
                     disableUI
                 );
+                if (cancelToken?.isCancellationRequested) {
+                    throw new CancellationError();
+                }
             }
 
             // Should be available now, wait with a timeout
@@ -123,6 +130,9 @@ export class KernelLauncher implements IKernelLauncher {
         cancelToken?: CancellationToken
     ): Promise<IKernelProcess> {
         const connection = await this.getKernelConnection(kernelConnectionMetadata);
+        if (cancelToken?.isCancellationRequested) {
+            throw new CancellationError();
+        }
         const kernelProcess = new KernelProcess(
             this.processExecutionFactory,
             this.daemonPool,
@@ -131,9 +141,39 @@ export class KernelLauncher implements IKernelLauncher {
             this.fs,
             resource,
             this.extensionChecker,
-            this.kernelEnvVarsService
+            this.kernelEnvVarsService,
+            this.pythonExecFactory
         );
-        await kernelProcess.launch(workingDirectory, timeout, cancelToken);
+
+        try {
+            await Promise.race([
+                kernelProcess.launch(workingDirectory, timeout, cancelToken),
+                createPromiseFromCancellation({ token: cancelToken, cancelAction: 'reject' })
+            ]);
+        } catch (ex) {
+            void kernelProcess.dispose();
+            if (ex instanceof CancellationError || cancelToken?.isCancellationRequested) {
+                throw new CancellationError();
+            }
+            throw ex;
+        }
+
+        const disposable = kernelProcess.exited(
+            ({ exitCode, reason }) => {
+                sendTelemetryEvent(Telemetry.RawKernelSessionKernelProcessExited, undefined, {
+                    exitCode,
+                    exitReason: getTelemetrySafeErrorMessageFromPythonTraceback(reason)
+                });
+                KernelLauncher._usedPorts.delete(connection.control_port);
+                KernelLauncher._usedPorts.delete(connection.hb_port);
+                KernelLauncher._usedPorts.delete(connection.iopub_port);
+                KernelLauncher._usedPorts.delete(connection.shell_port);
+                KernelLauncher._usedPorts.delete(connection.stdin_port);
+                disposable.dispose();
+            },
+            this,
+            this.disposables
+        );
 
         // Double check for cancel
         if (cancelToken?.isCancellationRequested) {
@@ -154,11 +194,11 @@ export class KernelLauncher implements IKernelLauncher {
     static async findNextFreePort(port: number): Promise<number[]> {
         // Then get the next set starting at that point
         const ports = await KernelLauncher.getPorts(5, { host: '127.0.0.1', port });
-        if (ports.some((item) => KernelLauncher.usedPorts.has(item))) {
-            const maxPort = Math.max(...KernelLauncher.usedPorts, ...ports);
+        if (ports.some((item) => KernelLauncher._usedPorts.has(item))) {
+            const maxPort = Math.max(...KernelLauncher._usedPorts, ...ports);
             return KernelLauncher.findNextFreePort(maxPort);
         }
-        ports.forEach((item) => KernelLauncher.usedPorts.add(item));
+        ports.forEach((item) => KernelLauncher._usedPorts.add(item));
         return ports;
     }
 
@@ -189,38 +229,5 @@ export class KernelLauncher implements IKernelLauncher {
             iopub_port: ports[4],
             kernel_name: kernelConnectionMetadata.kernelSpec?.name || 'python'
         };
-    }
-
-    // If we need to install our dependencies now
-    // then install ipykernel into the interpreter or throw error
-    private async installDependenciesIntoInterpreter(
-        interpreter: PythonEnvironment,
-        cancelToken?: CancellationToken,
-        disableUI?: boolean
-    ) {
-        // Cache the install question so when two kernels start at the same time for the same interpreter we don't ask twice
-        let deferred = this.dependencyPromises.get(interpreter.path);
-        if (!deferred) {
-            deferred = createDeferredFromPromise(
-                this.kernelDependencyService.installMissingDependencies(interpreter, cancelToken, disableUI)
-            );
-            this.dependencyPromises.set(interpreter.path, deferred);
-        }
-
-        // Get the result of the question
-        try {
-            const result = await deferred.promise;
-            if (result !== KernelInterpreterDependencyResponse.ok) {
-                throw new IpyKernelNotInstalledError(
-                    localize.DataScience.ipykernelNotInstalled().format(
-                        `${interpreter.displayName || interpreter.path}:${interpreter.path}`
-                    ),
-                    result
-                );
-            }
-        } finally {
-            // Don't need to cache anymore
-            this.dependencyPromises.delete(interpreter.path);
-        }
     }
 }

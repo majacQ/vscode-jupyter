@@ -19,14 +19,15 @@ export interface ILanguageServer extends Disposable {
 
 export const IPythonApiProvider = Symbol('IPythonApi');
 export interface IPythonApiProvider {
+    onDidActivatePythonExtension: Event<void>;
     getApi(): Promise<PythonApi>;
     setApi(api: PythonApi): void;
 }
 export const IPythonExtensionChecker = Symbol('IPythonExtensionChecker');
 export interface IPythonExtensionChecker {
     readonly isPythonExtensionInstalled: boolean;
+    readonly isPythonExtensionActive: boolean;
     showPythonExtensionInstallRequiredPrompt(): Promise<void>;
-    showPythonExtensionInstallRecommendedPrompt(): Promise<void>;
 }
 
 /**
@@ -39,7 +40,8 @@ export enum JupyterProductToInstall {
     notebook = 'notebook',
     kernelspec = 'kernelspec',
     nbconvert = 'nbconvert',
-    pandas = 'pandas'
+    pandas = 'pandas',
+    pip = 'pip'
 }
 
 /**
@@ -55,6 +57,7 @@ export type PythonApi = {
      * IInterpreterService
      */
     onDidChangeInterpreter: Event<void>;
+    onDidChangeInterpreters: Event<void>;
     /**
      * IInterpreterService
      */
@@ -87,7 +90,9 @@ export type PythonApi = {
     install(
         product: JupyterProductToInstall,
         resource?: InterpreterUri,
-        cancel?: CancellationToken
+        cancel?: CancellationToken,
+        reInstallAndUpdate?: boolean,
+        installPipIfRequired?: boolean
     ): Promise<InstallerResponse>;
     /**
      * Retrieve interpreter path selected for Jupyter server from Python memento storage
@@ -111,7 +116,13 @@ export type PythonApi = {
 export const IPythonInstaller = Symbol('IPythonInstaller');
 export interface IPythonInstaller {
     readonly onInstalled: Event<{ product: Product; resource?: InterpreterUri }>;
-    install(product: Product, resource?: InterpreterUri, cancel?: CancellationToken): Promise<InstallerResponse>;
+    install(
+        product: Product,
+        resource?: InterpreterUri,
+        cancel?: CancellationToken,
+        reInstallAndUpdate?: boolean,
+        installPipIfRequired?: boolean
+    ): Promise<InstallerResponse>;
 }
 
 export const IPythonDebuggerPathProvider = Symbol('IPythonDebuggerPathProvider');

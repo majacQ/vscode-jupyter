@@ -3,30 +3,34 @@
 'use strict';
 import { anything, instance, mock, verify, when } from 'ts-mockito';
 import * as typemoq from 'typemoq';
-import { IApplicationShell } from '../../client/common/application/types';
+import { IApplicationShell, ICommandManager, IWorkspaceService } from '../../client/common/application/types';
+import { IBrowserService } from '../../client/common/types';
 import * as localize from '../../client/common/utils/localize';
-import { DataScienceErrorHandler } from '../../client/datascience/errorHandler/errorHandler';
-import { JupyterInstallError } from '../../client/datascience/jupyter/jupyterInstallError';
-import { JupyterSelfCertsError } from '../../client/datascience/jupyter/jupyterSelfCertsError';
-import { JupyterZMQBinariesNotFoundError } from '../../client/datascience/jupyter/jupyterZMQBinariesNotFoundError';
-import { JupyterServerSelector } from '../../client/datascience/jupyter/serverSelector';
+import { DataScienceErrorHandler } from '../../client/datascience/errors/errorHandler';
+import { JupyterInstallError } from '../../client/datascience/errors/jupyterInstallError';
+import { JupyterSelfCertsError } from '../../client/datascience/errors/jupyterSelfCertsError';
 import { IJupyterInterpreterDependencyManager } from '../../client/datascience/types';
 
 suite('DataScience Error Handler Unit Tests', () => {
     let applicationShell: typemoq.IMock<IApplicationShell>;
     let dataScienceErrorHandler: DataScienceErrorHandler;
     let dependencyManager: IJupyterInterpreterDependencyManager;
-    let serverSelector: JupyterServerSelector;
-
+    let worksapceService: IWorkspaceService;
+    let browser: IBrowserService;
+    let commandManager: ICommandManager;
     setup(() => {
         applicationShell = typemoq.Mock.ofType<IApplicationShell>();
+        worksapceService = mock<IWorkspaceService>();
         dependencyManager = mock<IJupyterInterpreterDependencyManager>();
-        serverSelector = mock(JupyterServerSelector);
+        browser = mock<IBrowserService>();
+        commandManager = mock<ICommandManager>();
         when(dependencyManager.installMissingDependencies(anything())).thenResolve();
         dataScienceErrorHandler = new DataScienceErrorHandler(
             applicationShell.object,
             instance(dependencyManager),
-            instance(serverSelector)
+            instance(worksapceService),
+            instance(browser),
+            instance(commandManager)
         );
     });
     const message = 'Test error message.';
@@ -94,20 +98,5 @@ suite('DataScience Error Handler Unit Tests', () => {
         await dataScienceErrorHandler.handleError(err);
 
         verify(dependencyManager.installMissingDependencies(err)).once();
-    });
-
-    test('ZMQ Install Error', async () => {
-        applicationShell
-            .setup((app) =>
-                app.showErrorMessage(typemoq.It.isAny(), typemoq.It.isValue(localize.DataScience.selectNewServer()))
-            )
-            .returns(() => Promise.resolve(localize.DataScience.selectNewServer()))
-            .verifiable(typemoq.Times.once());
-        when(serverSelector.selectJupyterURI(anything())).thenResolve();
-        when(serverSelector.selectJupyterURI(anything(), anything())).thenResolve();
-        const err = new JupyterZMQBinariesNotFoundError('Not found');
-        await dataScienceErrorHandler.handleError(err);
-        verify(serverSelector.selectJupyterURI(anything())).once();
-        applicationShell.verifyAll();
     });
 });

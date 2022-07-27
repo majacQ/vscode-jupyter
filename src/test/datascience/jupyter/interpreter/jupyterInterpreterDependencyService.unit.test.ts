@@ -4,7 +4,7 @@
 'use strict';
 
 import { assert } from 'chai';
-import { anything, instance, mock, verify, when } from 'ts-mockito';
+import { anything, deepEqual, instance, mock, verify, when } from 'ts-mockito';
 import { ApplicationShell } from '../../../../client/common/application/applicationShell';
 import { IApplicationShell } from '../../../../client/common/application/types';
 import { ProductInstaller } from '../../../../client/common/installer/productInstaller';
@@ -73,9 +73,9 @@ suite('DataScience - Jupyter Interpreter Configuration', () => {
         verify(
             appShell.showErrorMessage(
                 anything(),
+                deepEqual({ modal: true }),
                 DataScience.jupyterInstall(),
-                DataScience.selectDifferentJupyterInterpreter(),
-                DataScience.pythonInteractiveHelpLink()
+                DataScience.selectDifferentJupyterInterpreter()
             )
         ).once();
         assert.equal(response, JupyterInterpreterDependencyResponse.cancel);
@@ -87,24 +87,26 @@ suite('DataScience - Jupyter Interpreter Configuration', () => {
     test('Reinstall Jupyter if jupyter and notebook are installed but kernelspec is not found', async () => {
         when(installer.isInstalled(Product.jupyter, pythonInterpreter)).thenResolve(true);
         when(installer.isInstalled(Product.notebook, pythonInterpreter)).thenResolve(true);
+        when(installer.isInstalled(Product.pip, pythonInterpreter)).thenResolve(true);
         when(appShell.showErrorMessage(anything(), anything(), anything(), anything())).thenResolve(
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             DataScience.jupyterInstall() as any
         );
         when(command.exec(anything(), anything())).thenReject(new Error('Not found'));
-        when(installer.install(anything(), anything(), anything())).thenResolve(InstallerResponse.Installed);
-
+        when(installer.install(anything(), anything(), anything(), anything())).thenResolve(
+            InstallerResponse.Installed
+        );
         const response = await configuration.installMissingDependencies(pythonInterpreter);
 
         // Jupyter must be installed & not kernelspec or anything else.
-        verify(installer.install(Product.jupyter, anything(), anything())).once();
-        verify(installer.install(anything(), anything(), anything())).once();
+        verify(installer.install(Product.jupyter, anything(), anything(), anything(), anything())).once();
+        verify(installer.install(anything(), anything(), anything(), anything(), anything())).once();
         verify(
             appShell.showErrorMessage(
                 anything(),
+                deepEqual({ modal: true }),
                 DataScience.jupyterInstall(),
-                DataScience.selectDifferentJupyterInterpreter(),
-                anything()
+                DataScience.selectDifferentJupyterInterpreter()
             )
         ).once();
         assert.equal(response, JupyterInterpreterDependencyResponse.cancel);
@@ -120,11 +122,13 @@ suite('DataScience - Jupyter Interpreter Configuration', () => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             DataScience.jupyterInstall() as any
         );
-        when(installer.install(anything(), anything(), anything())).thenResolve(installerResponse);
+        when(installer.install(anything(), anything(), anything(), anything(), anything())).thenResolve(
+            installerResponse
+        );
 
         const response = await configuration.installMissingDependencies(pythonInterpreter);
 
-        verify(installer.install(Product.jupyter, pythonInterpreter, anything())).once();
+        verify(installer.install(Product.jupyter, pythonInterpreter, anything(), anything(), anything())).once();
         assert.equal(response, expectedConfigurationReponse);
     }
     async function testInstallationOfJupyterAndNotebook(
@@ -138,13 +142,17 @@ suite('DataScience - Jupyter Interpreter Configuration', () => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             DataScience.jupyterInstall() as any
         );
-        when(installer.install(Product.jupyter, anything(), anything())).thenResolve(jupyterInstallerResponse);
-        when(installer.install(Product.notebook, anything(), anything())).thenResolve(notebookInstallationResponse);
+        when(installer.install(Product.jupyter, anything(), anything(), anything(), anything())).thenResolve(
+            jupyterInstallerResponse
+        );
+        when(installer.install(Product.notebook, anything(), anything(), anything(), anything())).thenResolve(
+            notebookInstallationResponse
+        );
 
         const response = await configuration.installMissingDependencies(pythonInterpreter);
 
-        verify(installer.install(Product.jupyter, pythonInterpreter, anything())).once();
-        verify(installer.install(Product.notebook, pythonInterpreter, anything())).once();
+        verify(installer.install(Product.jupyter, pythonInterpreter, anything(), anything(), anything())).once();
+        verify(installer.install(Product.notebook, pythonInterpreter, anything(), anything(), anything())).once();
         assert.equal(response, expectedConfigurationReponse);
     }
     test('Install Jupyter and return ok if installed successfully', async () =>

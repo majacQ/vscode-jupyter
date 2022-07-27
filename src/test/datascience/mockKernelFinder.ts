@@ -1,37 +1,42 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-import type { nbformat } from '@jupyterlab/coreutils';
+import type * as nbformat from '@jupyterlab/nbformat';
 import { CancellationToken } from 'vscode';
 import { Resource } from '../../client/common/types';
-import { IKernelFinder } from '../../client/datascience/kernel-launcher/types';
-import { IJupyterKernelSpec } from '../../client/datascience/types';
-import { PythonEnvironment } from '../../client/pythonEnvironments/info';
+import { LocalKernelConnectionMetadata } from '../../client/datascience/jupyter/kernels/types';
+import { ILocalKernelFinder } from '../../client/datascience/kernel-launcher/types';
 
-export class MockKernelFinder implements IKernelFinder {
-    private dummySpecs = new Map<string, IJupyterKernelSpec>();
+export class MockKernelFinder implements ILocalKernelFinder {
+    private dummySpecs = new Map<string, LocalKernelConnectionMetadata>();
 
-    constructor(private readonly realFinder: IKernelFinder) {}
+    constructor(private readonly realFinder: ILocalKernelFinder) {}
+    public listNonPythonKernels(_cancelToken?: CancellationToken): Promise<LocalKernelConnectionMetadata[]> {
+        throw new Error('Method not implemented.');
+    }
 
-    public async findKernelSpec(
+    public async findKernel(
         resource: Resource,
-        option?: nbformat.INotebookMetadata | PythonEnvironment,
+        option?: nbformat.INotebookMetadata,
         _cancelToken?: CancellationToken
-    ): Promise<IJupyterKernelSpec | undefined> {
+    ): Promise<LocalKernelConnectionMetadata | undefined> {
         const spec = option?.path
             ? this.dummySpecs.get(option.path as string)
             : this.dummySpecs.get(((option?.path as string) || '').toString());
         if (spec) {
             return spec;
         }
-        return this.realFinder.findKernelSpec(resource, option);
+        return this.realFinder.findKernel(resource, option);
     }
 
-    public async listKernelSpecs(): Promise<IJupyterKernelSpec[]> {
+    public async listKernels(_resource: Resource): Promise<LocalKernelConnectionMetadata[]> {
         throw new Error('Not yet implemented');
     }
+    public getKernelSpecRootPath(): Promise<string | undefined> {
+        return this.realFinder.getKernelSpecRootPath();
+    }
 
-    public addKernelSpec(pythonPathOrResource: string, spec: IJupyterKernelSpec) {
+    public addKernelSpec(pythonPathOrResource: string, spec: LocalKernelConnectionMetadata) {
         this.dummySpecs.set(pythonPathOrResource, spec);
     }
 }

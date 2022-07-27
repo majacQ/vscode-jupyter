@@ -64,12 +64,14 @@ export function initialize() {
     generateMock('env');
     generateMock('debug');
     generateMock('scm');
+    generateMock('notebooks');
     generateNotebookMocks();
 
     const commands = new MockCommands();
     (mockedVSCode as any).commands = commands;
     mockedVSCodeNamespaces.commands = commands as any;
-
+    mockedVSCodeNamespaces.workspace?.setup((ws) => ws.notebookDocuments).returns(() => []);
+    mockedVSCodeNamespaces.window?.setup((w) => w.visibleNotebookEditors).returns(() => []);
     // Use mock clipboard fo testing purposes.
     const clipboard = new MockClipboard();
     mockedVSCodeNamespaces.env?.setup((e) => e.clipboard).returns(() => clipboard);
@@ -98,6 +100,7 @@ mockedVSCode.Disposable = vscodeMocks.vscMock.Disposable as any;
 mockedVSCode.ExtensionKind = vscodeMocks.vscMock.ExtensionKind;
 mockedVSCode.CodeAction = vscodeMocks.vscMock.CodeAction;
 mockedVSCode.EventEmitter = vscodeMocks.vscMock.EventEmitter;
+mockedVSCode.CancellationError = vscodeMocks.vscMock.CancellationError;
 mockedVSCode.CancellationTokenSource = vscodeMocks.vscMock.CancellationTokenSource;
 mockedVSCode.CompletionItemKind = vscodeMocks.vscMock.CompletionItemKind;
 mockedVSCode.SymbolKind = vscodeMocks.vscMock.SymbolKind;
@@ -111,6 +114,8 @@ mockedVSCode.SymbolInformation = vscodeMocks.vscMockExtHostedTypes.SymbolInforma
 mockedVSCode.CompletionItem = vscodeMocks.vscMockExtHostedTypes.CompletionItem;
 mockedVSCode.CompletionItemKind = vscodeMocks.vscMockExtHostedTypes.CompletionItemKind;
 mockedVSCode.CodeLens = vscodeMocks.vscMockExtHostedTypes.CodeLens;
+mockedVSCode.Diagnostic = vscodeMocks.vscMockExtHostedTypes.Diagnostic;
+mockedVSCode.CallHierarchyItem = vscodeMocks.vscMockExtHostedTypes.CallHierarchyItem;
 mockedVSCode.DiagnosticSeverity = vscodeMocks.vscMockExtHostedTypes.DiagnosticSeverity;
 mockedVSCode.SnippetString = vscodeMocks.vscMockExtHostedTypes.SnippetString;
 mockedVSCode.ConfigurationTarget = vscodeMocks.vscMockExtHostedTypes.ConfigurationTarget;
@@ -138,7 +143,9 @@ mockedVSCode.FileSystemError = vscodeMocks.vscMockExtHostedTypes.FileSystemError
 (mockedVSCode as any).NotebookRunState = vscodeMocks.vscMockExtHostedTypes.NotebookRunState;
 (mockedVSCode as any).NotebookCellRunState = vscodeMocks.vscMockExtHostedTypes.NotebookCellRunState;
 (mockedVSCode as any).NotebookCellMetadata = vscodeMocks.vscMockExtHostedTypes.NotebookCellMetadata;
-
+(mockedVSCode as any).NotebookCellMetadata = vscodeMocks.vscMockExtHostedTypes.NotebookCellMetadata;
+(mockedVSCode as any).notebook = { notebookDocuments: [] };
+mockedVSCode.workspace;
 // This API is used in src/client/telemetry/telemetry.ts
 const extensions = TypeMoq.Mock.ofType<typeof vscode.extensions>();
 extensions.setup((e) => e.all).returns(() => []);

@@ -16,3 +16,7 @@
     font-size: var(--vscode-font-size);
     font-weight: var(--vscode-font-weight);
 }
+
+.index-column-formatter {
+    text-align: right;
+}

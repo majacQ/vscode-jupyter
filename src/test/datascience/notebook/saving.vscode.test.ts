@@ -7,8 +7,10 @@
 import { assert, expect } from 'chai';
 import * as path from 'path';
 import * as sinon from 'sinon';
-import { NotebookCell, NotebookCellRunState, Uri } from 'vscode';
+import { NotebookCell, Uri } from 'vscode';
 import { IVSCodeNotebook } from '../../../client/common/application/types';
+import { PYTHON_LANGUAGE } from '../../../client/common/constants';
+import { traceInfo } from '../../../client/common/logger';
 import { IDisposable } from '../../../client/common/types';
 import { IExtensionTestApi, waitForCondition } from '../../common';
 import { IS_REMOTE_NATIVE_TEST } from '../../constants';
@@ -25,9 +27,9 @@ import {
     runAllCellsInActiveNotebook,
     insertCodeCell,
     saveActiveNotebook,
-    trustAllNotebooks,
     waitForExecutionCompletedSuccessfully,
-    waitForExecutionCompletedWithErrors
+    waitForExecutionCompletedWithErrors,
+    waitForKernelToGetAutoSelected
 } from './helper';
 
 /* eslint-disable @typescript-eslint/no-explicit-any, no-invalid-this */
@@ -52,17 +54,22 @@ suite('DataScience - VSCode Notebook - (Saving) (slow)', function () {
         }
         vscodeNotebook = api.serviceContainer.get<IVSCodeNotebook>(IVSCodeNotebook);
     });
-    setup(async () => {
+    setup(async function () {
+        traceInfo(`Start Test ${this.currentTest?.title}`);
         sinon.restore();
-        await trustAllNotebooks();
         // Don't use same file (due to dirty handling, we might save in dirty.)
         // Coz we won't save to file, hence extension will backup in dirty file and when u re-open it will open from dirty.
         testEmptyIPynb = Uri.file(await createTemporaryNotebook(templateIPynbEmpty, disposables));
+        traceInfo(`Start Test (completed) ${this.currentTest?.title}`);
     });
-    teardown(() => closeNotebooks(disposables));
+    teardown(async function () {
+        traceInfo(`Ended Test ${this.currentTest?.title}`);
+        await closeNotebooks(disposables);
+        traceInfo(`Ended Test (completed) ${this.currentTest?.title}`);
+    });
     suiteTeardown(closeNotebooksAndCleanUpAfterTests);
     test('Verify output & metadata when re-opening (slow)', async () => {
-        await openNotebook(api.serviceContainer, testEmptyIPynb.fsPath);
+        await openNotebook(testEmptyIPynb.fsPath);
 
         await insertCodeCell('print(1)', { index: 0 });
         await insertCodeCell('print(a)', { index: 1 });
@@ -74,12 +81,13 @@ suite('DataScience - VSCode Notebook - (Saving) (slow)', function () {
         let cell4: NotebookCell;
 
         function initializeCells() {
-            cell1 = vscodeNotebook.activeNotebookEditor?.document.cells![0]!;
-            cell2 = vscodeNotebook.activeNotebookEditor?.document.cells![1]!;
-            cell3 = vscodeNotebook.activeNotebookEditor?.document.cells![2]!;
-            cell4 = vscodeNotebook.activeNotebookEditor?.document.cells![3]!;
+            cell1 = vscodeNotebook.activeNotebookEditor?.document.cellAt(0)!;
+            cell2 = vscodeNotebook.activeNotebookEditor?.document.getCells()![1]!;
+            cell3 = vscodeNotebook.activeNotebookEditor?.document.getCells()![2]!;
+            cell4 = vscodeNotebook.activeNotebookEditor?.document.getCells()![3]!;
         }
         initializeCells();
+        await waitForKernelToGetAutoSelected(PYTHON_LANGUAGE);
         await runAllCellsInActiveNotebook();
         // Wait till 1 & 2 finish & 3rd cell starts executing.
         await waitForExecutionCompletedSuccessfully(cell1!);
@@ -90,71 +98,33 @@ suite('DataScience - VSCode Notebook - (Saving) (slow)', function () {
             'Cells did not finish executing'
         );
 
-        function verifyCelMetadata(reOpened = false) {
+        function verifyCelMetadata() {
             assert.lengthOf(cell1.outputs, 1, 'Incorrect output for cell 1');
             assert.lengthOf(cell2.outputs, 1, 'Incorrect output for cell 2');
             assert.lengthOf(cell3.outputs, 0, 'Incorrect output for cell 3'); // stream and interrupt error.
             assert.lengthOf(cell4.outputs, 0, 'Incorrect output for cell 4');
 
-            assert.equal(
-                cell1.metadata.runState,
-                reOpened ? NotebookCellRunState.Idle : NotebookCellRunState.Success,
-                'Incorrect state in cell 1'
-            );
-            assert.equal(
-                cell2.metadata.runState,
-                reOpened ? NotebookCellRunState.Idle : NotebookCellRunState.Error,
-                'Incorrect state in cell 2'
-            );
-            assert.equal(
-                cell3.metadata.runState || NotebookCellRunState.Idle,
-                NotebookCellRunState.Idle,
-                'Incorrect state in cell 3'
-            );
-            assert.equal(
-                cell4.metadata.runState || NotebookCellRunState.Idle,
-                NotebookCellRunState.Idle,
-                'Incorrect state in cell 4'
-            );
-
             assertHasTextOutputInVSCode(cell1, '1', 0);
             assertVSCCellHasErrorOutput(cell2);
 
-            expect(cell1.metadata.executionOrder).to.be.greaterThan(0, 'Execution count should be > 0');
-            expect(cell2.metadata.executionOrder).to.be.greaterThan(
-                cell1.metadata.executionOrder!,
+            expect(cell1.executionSummary?.executionOrder).to.be.greaterThan(0, 'Execution count should be > 0');
+            expect(cell2.executionSummary?.executionOrder).to.be.greaterThan(
+                cell1.executionSummary?.executionOrder!,
                 'Execution count > cell 1'
             );
-            assert.isUndefined(cell3.metadata.executionOrder, 'Execution count must be undefined for cell 3');
-            assert.isUndefined(cell4.metadata.executionOrder, 'Execution count must be undefined for cell 4');
-
-            assert.isEmpty(cell1.metadata.statusMessage || '', 'Cell 1 status should be empty'); // No errors.
-            assert.isNotEmpty(cell2.metadata.statusMessage, 'Cell 1 status should be empty'); // Errors.
-            assert.isEmpty(cell3.metadata.statusMessage || '', 'Cell 3 status should be empty'); // Not executed.
-            assert.isEmpty(cell4.metadata.statusMessage || '', 'Cell 4 status should be empty'); // Not executed.
-
-            // Persisting these require us to save custom metadata in ipynb. Not sure users would like this. We'll have more changes in ipynb files.
-            // eslint-disable-next-line
-            // TODO: Discuss whether we need to persist these.
-            // assert.isOk(cell1.metadata.runStartTime, 'Start time should be > 0');
-            // assert.isOk(cell1.metadata.lastRunDuration, 'Duration should be > 0');
-            // assert.isOk(cell2.metadata.runStartTime, 'Start time should be > 0');
-            // assert.isOk(cell2.metadata.lastRunDuration, 'Duration should be > 0');
-            assert.isUndefined(cell3.metadata.runStartTime, 'Cell 3 did should not have run');
-            assert.isUndefined(cell3.metadata.lastRunDuration, 'Cell 3 did should not have run');
-            assert.isUndefined(cell4.metadata.runStartTime, 'Cell 4 did should not have run');
-            assert.isUndefined(cell4.metadata.lastRunDuration, 'Cell 4 did should not have run');
+            assert.isUndefined(cell3.executionSummary?.executionOrder, 'Execution count must be undefined for cell 3');
+            assert.isUndefined(cell4.executionSummary?.executionOrder, 'Execution count must be undefined for cell 4');
         }
 
         verifyCelMetadata();
 
         // Save and close this nb.
-        await saveActiveNotebook(disposables);
+        await saveActiveNotebook();
         await closeActiveWindows();
 
         // Reopen the notebook & validate the metadata.
-        await openNotebook(api.serviceContainer, testEmptyIPynb.fsPath);
+        await openNotebook(testEmptyIPynb.fsPath);
         initializeCells();
-        verifyCelMetadata(true);
+        verifyCelMetadata();
     });
 });

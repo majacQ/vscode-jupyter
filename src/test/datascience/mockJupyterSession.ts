@@ -2,76 +2,97 @@
 // Licensed under the MIT License.
 'use strict';
 import { Kernel, KernelMessage } from '@jupyterlab/services';
-import { JSONObject } from '@phosphor/coreutils/lib/json';
+import { JSONObject } from '@lumino/coreutils';
 import { CancellationTokenSource, Event, EventEmitter } from 'vscode';
 
 import { Observable } from 'rxjs/Observable';
 import { noop } from '../../client/common/utils/misc';
-import { JupyterInvalidKernelError } from '../../client/datascience/jupyter/jupyterInvalidKernelError';
-import { JupyterWaitForIdleError } from '../../client/datascience/jupyter/jupyterWaitForIdleError';
-import { JupyterKernelPromiseFailedError } from '../../client/datascience/jupyter/kernels/jupyterKernelPromiseFailedError';
+import { JupyterInvalidKernelError } from '../../client/datascience/errors/jupyterInvalidKernelError';
+import { JupyterWaitForIdleError } from '../../client/datascience/errors/jupyterWaitForIdleError';
 import { KernelConnectionMetadata } from '../../client/datascience/jupyter/kernels/types';
-import { ICell, IJupyterSession, KernelSocketInformation } from '../../client/datascience/types';
-import { ServerStatus } from '../../datascience-ui/interactive-common/mainState';
+import { IJupyterSession, KernelSocketInformation } from '../../client/datascience/types';
 import { sleep } from '../core';
 import { MockJupyterRequest } from './mockJupyterRequest';
 import { Resource } from '../../client/common/types';
+import type * as nbformat from '@jupyterlab/nbformat';
+import { concatMultilineString } from '../../datascience-ui/common';
+import { KernelInterruptTimeoutError } from '../../client/datascience/errors/kernelInterruptTimeoutError';
 
 const LineFeedRegEx = /(\r\n|\n)/g;
 
 /* eslint-disable @typescript-eslint/no-explicit-any, , no-multi-str,  */
 export class MockJupyterSession implements IJupyterSession {
     public readonly workingDirectory = '';
+    private _isDisposed?: boolean;
     public readonly kernelSocket = new Observable<KernelSocketInformation | undefined>();
-    private dict: Record<string, ICell>;
-    private restartedEvent: EventEmitter<void> = new EventEmitter<void>();
-    private onStatusChangedEvent: EventEmitter<ServerStatus> = new EventEmitter<ServerStatus>();
+    private dict: Map<string, nbformat.IBaseCell>;
+    private onStatusChangedEvent = new EventEmitter<KernelMessage.Status>();
     private timedelay: number;
     private executionCount: number = 0;
     private outstandingRequestTokenSources: CancellationTokenSource[] = [];
     private executes: string[] = [];
     private forceRestartTimeout: boolean = false;
     private completionTimeout: number = 1;
-    private lastRequest: MockJupyterRequest | undefined;
-    private _status = ServerStatus.Busy;
+    private lastRequest: Kernel.IFuture<any, any> | undefined;
+    private _status: KernelMessage.Status = 'busy';
+    private _disposed = new EventEmitter<void>();
+    public get onDidDispose() {
+        return this._disposed.event;
+    }
+    public get disposed() {
+        return this._isDisposed === true;
+    }
     constructor(
-        cellDictionary: Record<string, ICell>,
+        cellDictionary: Record<string, nbformat.IBaseCell> | nbformat.IBaseCell[],
         timedelay: number,
         private pendingIdleFailure: boolean = false,
         private pendingKernelChangeFailure: boolean = false
     ) {
-        this.dict = cellDictionary;
+        this.dict = new Map<string, nbformat.IBaseCell>();
+        if (Array.isArray(cellDictionary)) {
+            cellDictionary.forEach((cell) => {
+                const source = concatMultilineString(cell.source);
+                this.dict.set(source, cell);
+            });
+        } else {
+            Object.keys(cellDictionary).forEach((key) => {
+                this.dict.set(key, cellDictionary[key]);
+            });
+        }
         this.timedelay = timedelay;
         // Switch to idle after a timeout
-        setTimeout(() => this.changeStatus(ServerStatus.Idle), 100);
+        setTimeout(() => this.changeStatus('idle'), 100);
     }
 
-    public get onRestarted(): Event<void> {
-        return this.restartedEvent.event;
+    public shutdown(_force?: boolean): Promise<void> {
+        this._isDisposed = true;
+        this._disposed.fire();
+        this._disposed.dispose();
+        return Promise.resolve();
     }
 
-    public get onSessionStatusChanged(): Event<ServerStatus> {
-        if (!this.onStatusChangedEvent) {
-            this.onStatusChangedEvent = new EventEmitter<ServerStatus>();
-        }
+    public get onSessionStatusChanged(): Event<KernelMessage.Status> {
         return this.onStatusChangedEvent.event;
     }
-    public get status(): ServerStatus {
+    public get onIOPubMessage(): Event<KernelMessage.IIOPubMessage> {
+        return new EventEmitter<KernelMessage.IIOPubMessage>().event;
+    }
+    public get status(): KernelMessage.Status {
         return this._status;
     }
 
-    public async restart(_timeout: number): Promise<void> {
+    public async restart(): Promise<void> {
         // For every outstanding request, switch them to fail mode
         const requests = [...this.outstandingRequestTokenSources];
         requests.forEach((r) => r.cancel());
 
         if (this.forceRestartTimeout) {
-            throw new JupyterKernelPromiseFailedError('Forcing restart timeout');
+            throw new KernelInterruptTimeoutError(undefined as any);
         }
 
         return sleep(this.timedelay);
     }
-    public interrupt(_timeout: number): Promise<void> {
+    public interrupt(): Promise<void> {
         const requests = [...this.outstandingRequestTokenSources];
         requests.forEach((r) => r.cancel());
         return sleep(this.timedelay);
@@ -83,7 +104,7 @@ export class MockJupyterSession implements IJupyterSession {
         }
         return sleep(this.timedelay);
     }
-    public async requestKernelInfo(): Promise<KernelMessage.IInfoReplyMsg> {
+    public async requestKernelInfo(): Promise<KernelMessage.IInfoReplyMsg | undefined> {
         return {
             channel: 'shell',
             content: {
@@ -120,7 +141,8 @@ export class MockJupyterSession implements IJupyterSession {
         // Create a new dummy request
         this.executionCount += content.store_history && content.code.trim().length > 0 ? 1 : 0;
         const tokenSource = new CancellationTokenSource();
-        const request = new MockJupyterRequest(cell, this.timedelay, this.executionCount, tokenSource.token);
+        let request: Kernel.IFuture<any, any>;
+        request = new MockJupyterRequest(cell, this.timedelay, this.executionCount, tokenSource.token);
         this.outstandingRequestTokenSources.push(tokenSource);
 
         // When it finishes, it should not be an outstanding request anymore
@@ -133,6 +155,13 @@ export class MockJupyterSession implements IJupyterSession {
         request.done.then(removeHandler).catch(removeHandler);
         this.lastRequest = request;
         return request;
+    }
+
+    public requestDebug(
+        _content: KernelMessage.IDebugRequestMsg['content'],
+        _disposeOnDone?: boolean
+    ): Kernel.IControlFuture<KernelMessage.IDebugRequestMsg, KernelMessage.IDebugReplyMsg> {
+        throw new Error('Not implemented');
     }
 
     public requestInspect(
@@ -166,15 +195,15 @@ export class MockJupyterSession implements IJupyterSession {
         });
     }
 
-    public sendInputReply(content: string) {
+    public sendInputReply(content: KernelMessage.IInputReply) {
         if (this.lastRequest) {
-            this.lastRequest.sendInputReply({ value: content, status: 'ok' });
+            this.lastRequest.sendInputReply(content);
         }
     }
 
     public async requestComplete(
         _content: KernelMessage.ICompleteRequestMsg['content']
-    ): Promise<KernelMessage.ICompleteReplyMsg | undefined> {
+    ): Promise<KernelMessage.ICompleteReplyMsg> {
         await sleep(this.completionTimeout);
 
         return {
@@ -230,60 +259,6 @@ export class MockJupyterSession implements IJupyterSession {
         noop();
     }
 
-    public sendCommMessage(
-        buffers: (ArrayBuffer | ArrayBufferView)[],
-        content: { comm_id: string; data: JSONObject; target_name: string | undefined },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        metadata: any,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        msgId: any
-    ): Kernel.IShellFuture<
-        KernelMessage.IShellMessage<'comm_msg'>,
-        KernelMessage.IShellMessage<KernelMessage.ShellMessageType>
-    > {
-        const shellMessage = KernelMessage.createMessage<KernelMessage.ICommMsgMsg<'shell'>>({
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            msgType: 'comm_msg',
-            channel: 'shell',
-            buffers,
-            content,
-            metadata,
-            msgId,
-            session: '1',
-            username: '1'
-        });
-
-        return {
-            done: Promise.resolve(undefined),
-            msg: shellMessage,
-            onReply: noop,
-            onIOPub: noop,
-            onStdin: noop,
-            registerMessageHook: noop,
-            removeMessageHook: noop,
-            sendInputReply: noop,
-            isDisposed: false,
-            dispose: noop
-        };
-    }
-
-    public requestCommInfo(
-        _content: KernelMessage.ICommInfoRequestMsg['content']
-    ): Promise<KernelMessage.ICommInfoReplyMsg> {
-        const shellMessage = KernelMessage.createMessage<KernelMessage.ICommInfoReplyMsg>({
-            msgType: 'comm_info_reply',
-            channel: 'shell',
-            content: {
-                status: 'ok'
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            } as any,
-            metadata: {},
-            session: '1',
-            username: '1'
-        });
-
-        return Promise.resolve(shellMessage);
-    }
     public registerMessageHook(
         _msgId: string,
         _hook: (msg: KernelMessage.IIOPubMessage) => boolean | PromiseLike<boolean>
@@ -297,17 +272,17 @@ export class MockJupyterSession implements IJupyterSession {
         noop();
     }
 
-    private changeStatus(newStatus: ServerStatus) {
+    private changeStatus(newStatus: KernelMessage.Status) {
         this._status = newStatus;
         this.onStatusChangedEvent.fire(newStatus);
     }
 
-    private findCell = (code: string): ICell => {
+    private findCell = (code: string): nbformat.IBaseCell => {
         // Match skipping line separators
         const withoutLines = code.replace(LineFeedRegEx, '').toLowerCase();
 
-        if (this.dict.hasOwnProperty(withoutLines)) {
-            return this.dict[withoutLines] as ICell;
+        if (this.dict.has(withoutLines)) {
+            return this.dict.get(withoutLines)!;
         }
         // eslint-disable-next-line no-console
         console.log(`Cell '${code}' not found in mock`);

@@ -3,13 +3,16 @@
 'use strict';
 import { assert } from 'chai';
 import * as TypeMoq from 'typemoq';
-import { Position, Range, Uri } from 'vscode';
+import { NotebookCell, NotebookCellKind, Position, Range, Uri } from 'vscode';
 
 import { IDebugService } from '../../../client/common/application/types';
 import { IFileSystem } from '../../../client/common/platform/types';
 import { IConfigurationService, IWatchableJupyterSettings } from '../../../client/common/types';
 import { CellHashProvider } from '../../../client/datascience/editor-integration/cellhashprovider';
-import { CellState, ICell, ICellHashListener, IFileHashes } from '../../../client/datascience/types';
+import { IKernel } from '../../../client/datascience/jupyter/kernels/types';
+import { JupyterNotebookView } from '../../../client/datascience/notebook/constants';
+import { ICellHashListener, IFileHashes } from '../../../client/datascience/types';
+import { MockDocument } from '../mockDocument';
 import { MockDocumentManager } from '../mockDocumentManager';
 
 class HashListener implements ICellHashListener {
@@ -28,12 +31,14 @@ suite('CellHashProvider Unit Tests', () => {
     let pythonSettings: TypeMoq.IMock<IWatchableJupyterSettings>;
     let debugService: TypeMoq.IMock<IDebugService>;
     let fileSystem: TypeMoq.IMock<IFileSystem>;
+    let kernel: TypeMoq.IMock<IKernel>;
     const hashListener: HashListener = new HashListener();
     setup(() => {
         configurationService = TypeMoq.Mock.ofType<IConfigurationService>();
         pythonSettings = TypeMoq.Mock.ofType<IWatchableJupyterSettings>();
         debugService = TypeMoq.Mock.ofType<IDebugService>();
         fileSystem = TypeMoq.Mock.ofType<IFileSystem>();
+        kernel = TypeMoq.Mock.ofType<IKernel>();
         configurationService.setup((c) => c.getSettings(TypeMoq.It.isAny())).returns(() => pythonSettings.object);
         debugService.setup((d) => d.activeDebugSession).returns(() => undefined);
         fileSystem
@@ -45,7 +50,8 @@ suite('CellHashProvider Unit Tests', () => {
             configurationService.object,
             debugService.object,
             fileSystem.object,
-            [hashListener]
+            [hashListener],
+            kernel.object
         );
     });
 
@@ -53,21 +59,44 @@ suite('CellHashProvider Unit Tests', () => {
         documentManager.changeDocument(file, [{ range, newText }]);
     }
 
-    function sendCode(code: string, line: number, file?: string): Promise<void> {
-        const cell: ICell = {
-            file: Uri.file(file ? file : 'foo.py').fsPath,
-            line,
-            data: {
-                source: code,
-                cell_type: 'code',
+    function sendCode(code: string, line: number, file?: string) {
+        const fileName = file ? file : 'foo.py';
+        const cell: NotebookCell = {
+            index: 0,
+            notebook: {
+                uri: Uri.file(fileName),
+                notebookType: JupyterNotebookView,
+                version: 1,
+                isDirty: false,
+                isClosed: false,
+                isUntitled: false,
                 metadata: {},
-                outputs: [],
-                execution_count: 1
+                cellCount: 1,
+                save: () => {
+                    throw new Error('Method not implemented');
+                },
+                getCells: () => {
+                    throw new Error('Method not implemented');
+                },
+                cellAt: () => {
+                    throw new Error('Method not implemented');
+                }
             },
-            id: '1',
-            state: CellState.init
+            executionSummary: {},
+            kind: NotebookCellKind.Code,
+            document: new MockDocument(code, fileName, async () => true),
+            metadata: {
+                interactive: {
+                    file: Uri.file(fileName).fsPath,
+                    line,
+                    originalSource: code
+                },
+                id: 1
+            },
+            outputs: [],
+            mime: undefined
         };
-        return hashProvider.preExecute(cell, false);
+        return hashProvider.addCellHash(cell);
     }
 
     test('Add a cell and edit it', async () => {

@@ -3,7 +3,7 @@
 'use strict';
 import './mainPanel.css';
 
-import { JSONArray } from '@phosphor/coreutils';
+import { JSONArray } from '@lumino/coreutils';
 import * as React from 'react';
 
 import {
@@ -27,14 +27,18 @@ import { StyleInjector } from '../react-common/styleInjector';
 import { cellFormatterFunc } from './cellFormatter';
 import { ISlickGridAdd, ISlickGridSlice, ISlickRow, ReactSlickGrid } from './reactSlickGrid';
 import { generateTestData } from './testData';
-import { Image, ImageName } from '../react-common/image';
 
 import '../react-common/codicon/codicon.css';
 import '../react-common/seti/seti.less';
 import { SliceControl } from './sliceControl';
 import { debounce } from 'lodash';
+import * as uuid from 'uuid/v4';
 
-const SliceableTypes: Set<string> = new Set<string>(['ndarray', 'Tensor', 'EagerTensor']);
+import { initializeIcons } from '@fluentui/react';
+initializeIcons(); // Register all FluentUI icons being used to prevent developer console errors
+
+const SliceableTypes: Set<string> = new Set<string>(['ndarray', 'Tensor', 'EagerTensor', 'DataArray']);
+const RowNumberColumnName = uuid(); // Unique key for our column containing row numbers
 
 // Our css has to come after in order to override body styles
 export interface IMainPanelProps {
@@ -67,6 +71,7 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
     private sentDone = false;
     private postOffice: PostOffice = new PostOffice();
     private resetGridEvent: Slick.Event<ISlickGridSlice> = new Slick.Event<ISlickGridSlice>();
+    private resizeGridEvent: Slick.Event<void> = new Slick.Event<void>();
     private gridAddEvent: Slick.Event<ISlickGridAdd> = new Slick.Event<ISlickGridAdd>();
     private gridColumnUpdateEvent: Slick.Event<Slick.Column<Slick.SlickData>[]> = new Slick.Event<
         Slick.Column<Slick.SlickData>[]
@@ -175,6 +180,8 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
                     loadingData={this.state.totalRowCount > this.state.fetchedRowCount}
                     originalVariableShape={this.state.originalVariableShape}
                     handleSliceRequest={this.handleSliceRequest}
+                    onCheckboxToggled={this.handleCheckboxToggle}
+                    onPanelToggled={() => this.resizeGridEvent.notify()}
                 />
             );
         }
@@ -192,12 +199,16 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
                         <div className="icon-python breadcrumb-file-icon" />
                         <span>{this.state.fileName}</span>
                         {this.state.fileName ? (
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/node-fetch-2.6.7
+                            <div className="codicon codicon-chevron-right breadcrumb-codicon" />
+  =======
                             <Image
                                 baseTheme={this.props.baseTheme}
                                 class="image-button-image"
                                 codicon="chevron-right"
                                 image={ImageName.Cancel}
                             />
+  >>>>>>> joyceerhl/dataviewer-fonts
                         ) : undefined}
                         <span>{breadcrumbText}</span>
                     </div>
@@ -254,23 +265,23 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
     };
 
     private renderGrid() {
-        const filterRowsText = getLocString('DataScience.filterRowsButton', 'Filter Rows');
         const filterRowsTooltip = getLocString('DataScience.filterRowsTooltip', 'Click to filter');
         return (
             <ReactSlickGrid
                 ref={this.grid}
                 columns={this.state.gridColumns}
-                idProperty={this.state.indexColumn}
+                idProperty={RowNumberColumnName}
                 rowsAdded={this.gridAddEvent}
                 resetGridEvent={this.resetGridEvent}
+                resizeGridEvent={this.resizeGridEvent}
                 columnsUpdated={this.gridColumnUpdateEvent}
-                filterRowsText={filterRowsText}
                 filterRowsTooltip={filterRowsTooltip}
                 forceHeight={this.props.testMode ? 200 : undefined}
                 dataDimensionality={this.state.dataDimensionality}
                 originalVariableShape={this.state.originalVariableShape}
                 isSliceDataEnabled={this.state.isSliceDataEnabled}
                 handleSliceRequest={this.handleSliceRequest}
+                handleRefreshRequest={this.handleRefreshRequest}
             />
         );
     }
@@ -278,7 +289,7 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private initializeData(payload: any) {
         if (payload) {
-            const variable = payload as IDataFrameInfo & { isSliceDataEnabled: boolean };
+            const variable = payload as IDataFrameInfo;
             if (variable) {
                 const columns = this.generateColumns(variable);
                 const totalRowCount = variable.rowCount ?? 0;
@@ -288,8 +299,7 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
                 const originalVariableShape = variable.shape ?? this.state.originalVariableShape;
                 const variableName = this.state.variableName ?? variable.name;
                 const fileName = this.state.fileName ?? variable.fileName;
-                const isSliceDataEnabled =
-                    variable.isSliceDataEnabled && SliceableTypes.has(originalVariableType || '');
+                const isSliceDataEnabled = SliceableTypes.has(originalVariableType || '');
                 const sliceExpression = variable.sliceExpression;
 
                 // New data coming in, so reset everything and clear our cache of columns
@@ -371,7 +381,7 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
             gridRows: newActual
         });
 
-        // Tell our grid about the new ros
+        // Tell our grid about the new rows
         this.updateRows(normalized);
 
         // Get the next chunk
@@ -387,45 +397,58 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
     }
 
     private generateColumns(variable: IDataFrameInfo): Slick.Column<Slick.SlickData>[] {
-        // Generate an index column
-        const indexColumn = {
-            key: this.state.indexColumn,
-            type: ColumnType.Number
-        };
         if (variable.columns) {
-            const columns = [indexColumn].concat(variable.columns);
-            return columns.map((c: { key: string; type: ColumnType }, i: number) => {
-                return {
-                    type: c.type,
-                    field: c.key.toString(),
-                    id: `${i}`,
-                    name: c.key.toString(),
-                    sortable: true,
-                    formatter: cellFormatterFunc
-                };
-            });
+            // Generate a column for row numbers
+            const rowNumberColumn = {
+                key: RowNumberColumnName,
+                type: ColumnType.Number
+            };
+            const columns = [rowNumberColumn].concat(variable.columns);
+            return columns.reduce(
+                (accum: Slick.Column<Slick.SlickData>[], c: { key: string; type: ColumnType }, i: number) => {
+                    // Only show index column for pandas DataFrame and Series
+                    if (
+                        variable?.type === 'DataFrame' ||
+                        variable?.type === 'Series' ||
+                        c.key !== this.state.indexColumn
+                    ) {
+                        accum.push({
+                            type: c.type,
+                            field: c.key.toString(),
+                            id: `${i}`,
+                            name: c.key.toString(),
+                            sortable: true,
+                            formatter: cellFormatterFunc
+                        } as Slick.Column<Slick.SlickData>);
+                    }
+                    return accum;
+                },
+                []
+            );
         }
         return [];
     }
 
     private normalizeData(rows: JSONArray): ISlickRow[] {
-        // While processing rows we may encounter Inf, -Inf or NaN.
+        // While processing rows we may encounter Inf or -Inf.
         // These rows' column types will initially be 'string' or 'object' so
         // make sure we update the column types
         // Set of columns to update based on this batch of rows
         const columnsToUpdate = new Set<string>();
         // Make sure we have an index field and all rows have an item
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const normalizedRows = rows.map((r: any | undefined, idx: number) => {
             if (!r) {
                 r = {};
             }
-            r[this.state.indexColumn] = this.state.fetchedRowCount + idx;
+            r[RowNumberColumnName] = this.state.fetchedRowCount + idx;
             for (let [key, value] of Object.entries(r)) {
                 switch (value) {
                     case 'nan':
                         r[key] = NaN;
                         if (!this.columnsContainingInfOrNaN.has(key)) {
-                            columnsToUpdate.add(key);
+                            // Don't add column to columnsToUpdate just because of this because
+                            // some non-numerical columns can have NaN values if a value is missing
                             this.columnsContainingInfOrNaN.add(key);
                         }
                         break;
@@ -455,6 +478,7 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
             columns
                 .filter((column) => column.name && columnsToUpdate.has(column.name))
                 .forEach((column) => {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     (column as any).type = ColumnType.Number;
                 });
             this.updateColumns(columns);
@@ -468,6 +492,7 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
 
     private updateRows(newRows: ISlickRow[]) {
         if (this.updateTimeout !== undefined) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             clearTimeout(this.updateTimeout as any);
             this.updateTimeout = undefined;
         }
@@ -479,10 +504,19 @@ export class MainPanel extends React.Component<IMainPanelProps, IMainPanelState>
         }
     }
 
-    private debounceSliceRequest = debounce(this.sendMessage, 400);
+    private debounceRequest = debounce(this.sendMessage, 400);
+
     private handleSliceRequest = (args: IGetSliceRequest) => {
         // Fetching a slice is expensive so debounce requests
-        this.debounceSliceRequest(DataViewerMessages.GetSliceRequest, args);
+        this.debounceRequest(DataViewerMessages.GetSliceRequest, args);
+    };
+
+    private handleRefreshRequest = () => {
+        this.debounceRequest(DataViewerMessages.RefreshDataViewer);
+    };
+
+    private handleCheckboxToggle = (newState: boolean) => {
+        this.sendMessage(DataViewerMessages.SliceEnablementStateChanged, { newState });
     };
 
     private updateColumns(newColumns: Slick.Column<Slick.SlickData>[]) {

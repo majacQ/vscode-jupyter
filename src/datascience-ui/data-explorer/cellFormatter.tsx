@@ -24,9 +24,6 @@ class CellFormatter extends React.Component<ICellFormatterProps> {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const columnType = (this.props.columnDef as any).type;
             switch (columnType) {
-                case ColumnType.Bool:
-                    return this.renderBool(this.props.value as boolean);
-
                 case ColumnType.Number:
                     return this.renderNumber(this.props.value as number);
 
@@ -34,7 +31,7 @@ class CellFormatter extends React.Component<ICellFormatterProps> {
                     break;
             }
         }
-        // Otherwise an unknown type or a string
+        // Otherwise an unknown type, boolean, or a string
         const val = this.props.value?.toString() ?? '';
         return (
             <div className="cell-formatter" role="gridcell" title={val}>
@@ -43,6 +40,8 @@ class CellFormatter extends React.Component<ICellFormatterProps> {
         );
     }
 
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/node-fetch-2.6.7
+  =======
     private renderBool(value: boolean) {
         return (
             <div className="formatter cell-formatter" role="gridcell" title={value.toString()}>
@@ -51,10 +50,21 @@ class CellFormatter extends React.Component<ICellFormatterProps> {
         );
     }
 
+  >>>>>>> joyceerhl/dataviewer-fonts
     private renderNumber(value: number) {
         let val = generateDisplayValue(value);
+        const isIndexColumn = this.props.columnDef.id === '0';
+
         return (
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/node-fetch-2.6.7
+            <div
+                className={`number-formatter cell-formatter${isIndexColumn ? ' index-column-formatter' : ''}`}
+                role="gridcell"
+                title={val}
+            >
+  =======
             <div className="formatter number-formatter" role="gridcell" title={val}>
+  >>>>>>> joyceerhl/dataviewer-fonts
                 <span>{val}</span>
             </div>
         );

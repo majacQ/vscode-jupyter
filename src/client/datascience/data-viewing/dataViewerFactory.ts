@@ -7,7 +7,7 @@ import { inject, injectable } from 'inversify';
 
 import { IAsyncDisposable, IAsyncDisposableRegistry, IDisposableRegistry } from '../../common/types';
 import { IServiceContainer } from '../../ioc/types';
-import { captureTelemetry, sendTelemetryEvent } from '../../telemetry';
+import { captureTelemetry } from '../../telemetry';
 import { Commands, EditorContexts, Telemetry } from '../constants';
 import { IDataViewer, IDataViewerDataProvider, IDataViewerFactory } from './types';
 import { ICommandManager } from '../../common/application/types';
@@ -62,6 +62,10 @@ export class DataViewerFactory implements IDataViewerFactory, IAsyncDisposable {
         return result;
     }
 
+    public get activeViewer() {
+        return [...this.knownViewers.values()].find((v) => v.active);
+    }
+
     private updateOpenDataViewers(viewer: IDataViewer) {
         this.knownViewers.delete(viewer);
     }
@@ -88,6 +92,5 @@ export class DataViewerFactory implements IDataViewerFactory, IAsyncDisposable {
                 void viewer.refreshData();
             }
         }
-        void sendTelemetryEvent(Telemetry.RefreshDataViewer);
     }, 1000);
 }

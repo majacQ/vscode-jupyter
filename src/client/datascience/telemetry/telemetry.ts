@@ -1,11 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import cloneDeep = require('lodash/cloneDeep');
 import { Uri } from 'vscode';
 import { getOSType } from '../../common/utils/platform';
-import { getKernelConnectionId, KernelConnectionMetadata } from '../jupyter/kernels/types';
+import { KernelConnectionMetadata } from '../jupyter/kernels/types';
 import { Resource } from '../../common/types';
-import { IEventNamePropertyMapping, sendTelemetryEvent, setSharedProperty } from '../../telemetry';
+import { IEventNamePropertyMapping, sendTelemetryEvent, setSharedProperty, waitBeforeSending } from '../../telemetry';
 import { StopWatch } from '../../common/utils/stopWatch';
 import { ResourceSpecificTelemetryProperties } from './types';
 import { Telemetry } from '../constants';
@@ -18,16 +20,20 @@ import { getTelemetrySafeHashedString, getTelemetrySafeLanguage } from '../../te
 import { PythonEnvironment } from '../../pythonEnvironments/info';
 import { InterpreterPackages } from './interpreterPackages';
 import { populateTelemetryWithErrorInfo } from '../../common/errors';
+import { createDeferred } from '../../common/utils/async';
+import { getNormalizedInterpreterPath } from '../../pythonEnvironments/info/interpreter';
 
+/**
+ * This information is sent with each telemetry event.
+ */
 type ContextualTelemetryProps = {
-    kernelConnection: KernelConnectionMetadata;
     /**
-     * Used by WebViews & Interactive window.
-     * In those cases we know for a fact that the user changes the kernel.
-     * In Native Notebooks, we don't know whether the user changed the kernel or VS Code is just asking for default kernel.
-     * In Native Notebooks we track changes to selection by checking if previously selected kernel is the same as the new one.
+     * Whether we're starting the preferred kernel or not.
+     * If false, then the user chose a different kernel when starting the notebook.
+     * Doesn't really apply to Interactive Window, as we always pick the current interpreter.
      */
-    kernelConnectionChanged: boolean;
+    isPreferredKernel?: boolean;
+    kernelConnection: KernelConnectionMetadata;
     startFailed: boolean;
     kernelDied: boolean;
     interruptKernel: boolean;
@@ -35,6 +41,10 @@ type ContextualTelemetryProps = {
     kernelSpecCount: number; // Total number of kernel specs in list of kernels.
     kernelInterpreterCount: number; // Total number of interpreters in list of kernels
     kernelLiveCount: number; // Total number of live kernels in list of kernels.
+    /**
+     * When we start local Python kernels, this property indicates whether the interpreter matches the kernel. If not this means we've started the wrong interpreter or the mapping is wrong.
+     */
+    interpreterMatchesKernel: boolean;
 };
 
 type Context = {
@@ -44,22 +54,42 @@ const trackedInfo = new Map<string, [ResourceSpecificTelemetryProperties, Contex
 const currentOSType = getOSType();
 const pythonEnvironmentsByHash = new Map<string, PythonEnvironment>();
 
+/**
+ * Initializes the Interactive/Notebook telemetry as a result of user action.
+ */
+export function initializeInteractiveOrNotebookTelemetryBasedOnUserAction(
+    resourceUri: Resource,
+    kernelConnection: KernelConnectionMetadata
+) {
+    setSharedProperty('userExecutedCell', 'true');
+    trackKernelResourceInformation(resourceUri, { kernelConnection });
+}
+/**
+ * @param {(P[E] & { waitBeforeSending: Promise<void> })} [properties]
+ * Can optionally contain a property `waitBeforeSending` referencing a promise.
+ * Which must be awaited before sending the telemetry.
+ */
 export function sendKernelTelemetryEvent<P extends IEventNamePropertyMapping, E extends keyof P>(
     resource: Resource,
     eventName: E,
     durationMs?: Record<string, number> | number,
-    properties?: P[E],
+    properties?: P[E] & { waitBeforeSending?: Promise<void> },
     ex?: Error
 ) {
-    if (eventName === Telemetry.ExecuteCell || eventName === Telemetry.ExecuteNativeCell) {
+    if (eventName === Telemetry.ExecuteCell) {
         setSharedProperty('userExecutedCell', 'true');
     }
 
-    const addOnTelemetry = getContextualPropsForTelemetry(resource);
-    const props = properties || {};
-    Object.assign(props, addOnTelemetry || {});
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    sendTelemetryEvent(eventName as any, durationMs, props, ex, true);
+    const props = getContextualPropsForTelemetry(resource);
+    Object.assign(props, properties || {});
+    sendTelemetryEvent(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        eventName as any,
+        durationMs,
+        props,
+        ex,
+        true
+    );
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     resetData(resource, eventName as any, props);
@@ -68,15 +98,22 @@ export function sendKernelTelemetryEvent<P extends IEventNamePropertyMapping, E 
     incrementStartFailureCount(resource, eventName as any, props);
 }
 
+/**
+ * Send this & subsequent telemetry only after this promise has been resolved.
+ * We have a default timeout of 30s.
+ * @param {P[E]} [properties]
+ * Can optionally contain a property `waitBeforeSending` referencing a promise.
+ * Which must be awaited before sending the telemetry.
+ */
 export function sendKernelTelemetryWhenDone<P extends IEventNamePropertyMapping, E extends keyof P>(
     resource: Resource,
     eventName: E,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     promise: Promise<any> | Thenable<any>,
     stopWatch?: StopWatch,
-    properties?: P[E]
+    properties?: P[E] & { [waitBeforeSending]?: Promise<void> }
 ) {
-    if (eventName === Telemetry.ExecuteCell || eventName === Telemetry.ExecuteNativeCell) {
+    if (eventName === Telemetry.ExecuteCell) {
         setSharedProperty('userExecutedCell', 'true');
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,19 +124,34 @@ export function sendKernelTelemetryWhenDone<P extends IEventNamePropertyMapping,
         (promise as Promise<any>)
             .then(
                 (data) => {
-                    const addOnTelemetry = getContextualPropsForTelemetry(resource);
-                    Object.assign(props, addOnTelemetry);
-                    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-explicit-any
-                    sendTelemetryEvent(eventName as any, stopWatch!.elapsedTime, props as any);
+                    const props = getContextualPropsForTelemetry(resource);
+                    Object.assign(props, properties || {});
+                    sendTelemetryEvent(
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        eventName as any,
+                        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                        stopWatch!.elapsedTime,
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        props as any
+                    );
                     return data;
                     // eslint-disable-next-line @typescript-eslint/promise-function-async
                 },
                 (ex) => {
-                    const addOnTelemetry = getContextualPropsForTelemetry(resource);
-                    Object.assign(props, addOnTelemetry);
-                    populateTelemetryWithErrorInfo(props, ex);
-                    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-explicit-any
-                    sendTelemetryEvent(eventName as any, stopWatch!.elapsedTime, props as any, ex, true);
+                    const props = getContextualPropsForTelemetry(resource);
+                    Object.assign(props, properties || {});
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    populateTelemetryWithErrorInfo(props as any, ex);
+                    sendTelemetryEvent(
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        eventName as any,
+                        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                        stopWatch!.elapsedTime,
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        props as any,
+                        ex,
+                        true
+                    );
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     incrementStartFailureCount(resource, eventName as any, props);
                     return Promise.reject(ex);
@@ -118,12 +170,15 @@ export function trackKernelResourceInformation(resource: Resource, information: 
     const key = getUriKey(resource);
     const [currentData, context] = trackedInfo.get(key) || [
         {
-            resourceType: getResourceType(resource)
+            resourceType: getResourceType(resource),
+            resourceHash: resource ? getTelemetrySafeHashedString(resource.toString()) : undefined,
+            kernelSessionId: getTelemetrySafeHashedString(Date.now().toString())
         },
         { previouslySelectedKernelConnectionId: '' }
     ];
 
     if (information.restartKernel) {
+        currentData.kernelSessionId = getTelemetrySafeHashedString(Date.now().toString());
         currentData.interruptCount = 0;
         currentData.restartCount = (currentData.restartCount || 0) + 1;
     }
@@ -140,7 +195,7 @@ export function trackKernelResourceInformation(resource: Resource, information: 
 
     const kernelConnection = information.kernelConnection;
     if (kernelConnection) {
-        const newKernelConnectionId = getKernelConnectionId(kernelConnection);
+        const newKernelConnectionId = kernelConnection.id;
         // If we have selected a whole new kernel connection for this,
         // Then reset some of the data
         if (context.previouslySelectedKernelConnectionId !== newKernelConnectionId) {
@@ -151,9 +206,7 @@ export function trackKernelResourceInformation(resource: Resource, information: 
             context.previouslySelectedKernelConnectionId &&
             context.previouslySelectedKernelConnectionId !== newKernelConnectionId
         ) {
-            currentData.switchKernelCount = (currentData.switchKernelCount || 0) + 1;
-        }
-        if (information.kernelConnectionChanged) {
+            currentData.kernelSessionId = getTelemetrySafeHashedString(Date.now().toString());
             currentData.switchKernelCount = (currentData.switchKernelCount || 0) + 1;
         }
         let language: string | undefined;
@@ -172,7 +225,7 @@ export function trackKernelResourceInformation(resource: Resource, information: 
         }
         currentData.kernelLanguage = getTelemetrySafeLanguage(language);
         // Keep track of the kernel that was last selected.
-        context.previouslySelectedKernelConnectionId = getKernelConnectionId(kernelConnection);
+        context.previouslySelectedKernelConnectionId = kernelConnection.id;
 
         const interpreter = kernelConnection.interpreter;
         if (interpreter) {
@@ -181,7 +234,9 @@ export function trackKernelResourceInformation(resource: Resource, information: 
                 interpreter
             );
             currentData.pythonEnvironmentType = interpreter.envType;
-            currentData.pythonEnvironmentPath = getTelemetrySafeHashedString(interpreter.path);
+            currentData.pythonEnvironmentPath = getTelemetrySafeHashedString(
+                getNormalizedInterpreterPath(interpreter.path)
+            );
             pythonEnvironmentsByHash.set(currentData.pythonEnvironmentPath, interpreter);
             if (interpreter.version) {
                 const { major, minor, patch } = interpreter.version;
@@ -190,7 +245,7 @@ export function trackKernelResourceInformation(resource: Resource, information: 
                 currentData.pythonEnvironmentVersion = undefined;
             }
 
-            currentData.pythonEnvironmentPackages = getPythonEnvironmentPackages({ interpreter });
+            updatePythonPackages(currentData);
         }
 
         currentData.kernelConnectionType = currentData.kernelConnectionType || kernelConnection?.kind;
@@ -206,18 +261,44 @@ export function trackKernelResourceInformation(resource: Resource, information: 
  * Its possible the information is available at a later time.
  * Use this to update with the latest information (if available)
  */
-function updatePythonPackages(currentData: ResourceSpecificTelemetryProperties) {
-    // Possible the Python package information is now available, update the properties accordingly.
-    if (currentData.pythonEnvironmentPath) {
-        currentData.pythonEnvironmentPackages =
-            getPythonEnvironmentPackages({ interpreterHash: currentData.pythonEnvironmentPath }) ||
-            currentData.pythonEnvironmentPackages;
+function updatePythonPackages(
+    currentData: ResourceSpecificTelemetryProperties & { waitBeforeSending?: Promise<void> },
+    clonedCurrentData?: ResourceSpecificTelemetryProperties & {
+        waitBeforeSending?: Promise<void>;
     }
+) {
+    if (!currentData.pythonEnvironmentPath) {
+        return;
+    }
+    // Getting package information is async, hence update property to indicate that a promise is pending.
+    const deferred = createDeferred<void>();
+    // Hold sending of telemetry until we have updated the props with package information.
+    currentData.waitBeforeSending = deferred.promise;
+    if (clonedCurrentData) {
+        clonedCurrentData.waitBeforeSending = deferred.promise;
+    }
+    getPythonEnvironmentPackages({
+        interpreterHash: currentData.pythonEnvironmentPath
+    })
+        .then((packages) => {
+            currentData.pythonEnvironmentPackages = packages || currentData.pythonEnvironmentPackages;
+            if (clonedCurrentData) {
+                clonedCurrentData.pythonEnvironmentPackages = packages || clonedCurrentData.pythonEnvironmentPackages;
+            }
+        })
+        .catch(() => undefined)
+        .finally(() => {
+            deferred.resolve();
+            currentData.waitBeforeSending = undefined;
+            if (clonedCurrentData) {
+                clonedCurrentData.waitBeforeSending = undefined;
+            }
+        });
 }
 /**
  * Gets a JSON with hashed keys of some python packages along with their versions.
  */
-function getPythonEnvironmentPackages(options: { interpreter: PythonEnvironment } | { interpreterHash: string }) {
+async function getPythonEnvironmentPackages(options: { interpreter: PythonEnvironment } | { interpreterHash: string }) {
     let interpreter: PythonEnvironment | undefined;
     if ('interpreter' in options) {
         interpreter = options.interpreter;
@@ -227,7 +308,7 @@ function getPythonEnvironmentPackages(options: { interpreter: PythonEnvironment 
     if (!interpreter) {
         return '{}';
     }
-    const packages = InterpreterPackages.getPackageVersions(interpreter);
+    const packages = await InterpreterPackages.getPackageVersions(interpreter).catch(() => new Map<string, string>());
     if (!packages || packages.size === 0) {
         return '{}';
     }
@@ -241,22 +322,36 @@ function getUriKey(uri: Uri) {
     return currentOSType ? uri.fsPath.toLowerCase() : uri.fsPath;
 }
 
-function getContextualPropsForTelemetry(resource: Resource): ResourceSpecificTelemetryProperties | undefined {
+/**
+ * Always return a clone of the properties.
+ * We will be using a reference of this object elsewhere & adding properties to the object.
+ */
+function getContextualPropsForTelemetry(
+    resource: Resource
+): ResourceSpecificTelemetryProperties & { waitBeforeSendingTelemetry?: Promise<void> } {
     if (!resource) {
-        return;
+        return {};
     }
     const data = trackedInfo.get(getUriKey(resource));
     const resourceType = getResourceType(resource);
     if (!data && resourceType) {
         return {
-            resourceType
+            resourceType,
+            resourceHash: resource ? getTelemetrySafeHashedString(resource.toString()) : undefined
         };
     }
-    if (data) {
-        // Possible the Python package information is now available, update the properties accordingly.
-        updatePythonPackages(data[0]);
+    if (!data) {
+        return {};
     }
-    return data ? data[0] : undefined;
+    // Create a copy of this data as it gets updated later asynchronously for other events.
+    // At the point of sending this telemetry we don't want it to change again.
+    const clonedData = cloneDeep(data[0]);
+    // Possible the Python package information is now available, update the properties accordingly.
+    // We want to update both the data items with package information
+    // 1. Data we track against the Uri.
+    // 2. Data that is returned & sent via telemetry now
+    updatePythonPackages(data[0], clonedData);
+    return clonedData;
 }
 /**
  * Some information such as interrupt counters & restart counters need to be reset

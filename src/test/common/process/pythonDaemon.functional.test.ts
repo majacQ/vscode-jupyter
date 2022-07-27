@@ -55,7 +55,7 @@ suite('Daemon', () => {
         }
     });
     setup(async function () {
-        if (isPythonVersion('2.7')) {
+        if (await isPythonVersion('2.7')) {
             // eslint-disable-next-line no-invalid-this
             return this.skip();
         }
@@ -63,8 +63,8 @@ suite('Daemon', () => {
         // pythonProc = spawn(fullyQualifiedPythonPath, ['-m', 'vscode_datascience_helpers.daemon', '-v', `--log-file=${path.join(EXTENSION_ROOT_DIR, 'test.log')}`], { env });
         pythonProc = spawn(fullyQualifiedPythonPath, ['-m', 'vscode_datascience_helpers.daemon'], { env });
         connection = createMessageConnection(
-            new StreamMessageReader(pythonProc.stdout),
-            new StreamMessageWriter(pythonProc.stdin)
+            new StreamMessageReader(pythonProc.stdout!),
+            new StreamMessageWriter(pythonProc.stdin!)
         );
         connection.listen();
         pythonExecutionService = mock<IPythonExecutionService>();
@@ -96,14 +96,14 @@ suite('Daemon', () => {
 
     test('Ping', async () => {
         const data = 'Hello World';
-        const request = new RequestType<{ data: string }, { pong: string }, void, void>('ping');
+        const request = new RequestType<{ data: string }, { pong: string }, void>('ping');
         const result = await connection.sendRequest(request, { data });
         assert.equal(result.pong, data);
     });
 
     test('Ping with Unicode', async () => {
         const data = 'Hello World-₹-😄';
-        const request = new RequestType<{ data: string }, { pong: string }, void, void>('ping');
+        const request = new RequestType<{ data: string }, { pong: string }, void>('ping');
         const result = await connection.sendRequest(request, { data });
         assert.equal(result.pong, data);
     });
@@ -265,7 +265,7 @@ suite('Daemon', () => {
         const fileToExecute = await createPythonFile(source);
         const output = pythonDaemon.execObservable([fileToExecute], {});
         const outputsReceived: string[] = [];
-        await new Promise((resolve, reject) => {
+        await new Promise<void>((resolve, reject) => {
             output.out.subscribe((out) => outputsReceived.push(out.out.trim()), reject, resolve);
         });
         assert.deepEqual(
@@ -292,7 +292,7 @@ suite('Daemon', () => {
         const fileToExecute = await createPythonFile(source);
         const output = pythonDaemon.execObservable([fileToExecute], { throwOnStdErr: true });
         const outputsReceived: string[] = [];
-        const promise = new Promise((resolve, reject) => {
+        const promise = new Promise<void>((resolve, reject) => {
             output.out.subscribe((out) => outputsReceived.push(out.out.trim()), reject, resolve);
         });
         await expect(promise).to.eventually.be.rejectedWith('KABOOM');
