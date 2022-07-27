@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 'use strict';
-import { nbformat } from '@jupyterlab/coreutils';
+import type * as nbformat from '@jupyterlab/nbformat';
 import { ChildProcess } from 'child_process';
 import * as fs from 'fs-extra';
 import * as os from 'os';
@@ -27,12 +27,10 @@ import {
 import { IInstaller, Product, Resource } from '../../client/common/types';
 import { EXTENSION_ROOT_DIR } from '../../client/constants';
 import { generateCells } from '../../client/datascience/cellFactory';
-import { CellMatcher } from '../../client/datascience/cellMatcher';
 import { CodeSnippets, Identifiers } from '../../client/datascience/constants';
 import { KernelConnectionMetadata } from '../../client/datascience/jupyter/kernels/types';
 import {
     ICell,
-    IJupyterConnection,
     IJupyterKernel,
     IJupyterKernelSpec,
     IJupyterSession,
@@ -44,13 +42,15 @@ import { PythonEnvironment } from '../../client/pythonEnvironments/info';
 import { concatMultilineString } from '../../datascience-ui/common';
 import { noop, sleep } from '../core';
 import { InterpreterService } from '../interpreters/interpreterService';
-import { MockJupyterSession } from './mockJupyterSession';
 import { MockProcessService } from './mockProcessService';
 import { MockPythonService } from './mockPythonService';
+import { createCodeCell } from '../../datascience-ui/common/cellFactory';
+import { areInterpreterPathsSame } from '../../client/pythonEnvironments/info/interpreter';
+import { JupyterSession } from '../../client/datascience/jupyter/jupyterSession';
 
 /* eslint-disable @typescript-eslint/no-explicit-any, , no-multi-str,  */
 
-const MockJupyterTimeDelay = 10;
+// const MockJupyterTimeDelay = 10;
 const LineFeedRegEx = /(\r\n|\n)/g;
 
 export enum SupportedCommands {
@@ -92,13 +92,12 @@ export class MockJupyterManager implements IJupyterSessionManager {
     private pythonServices: MockPythonService[] = [];
     private activeInterpreter: PythonEnvironment | undefined;
     private sessionTimeout: number | undefined;
-    private cellDictionary: Record<string, ICell> = {};
+    private cellDictionary: Record<string, nbformat.IBaseCell> = {};
     private kernelSpecs: { name: string; dir: string }[] = [];
-    private currentSession: MockJupyterSession | undefined;
-    private connInfo: IJupyterConnection | undefined;
+    private currentSession: JupyterSession | undefined;
     private cleanTemp: (() => void) | undefined;
-    private pendingSessionFailure = false;
-    private pendingKernelChangeFailure = false;
+    // private pendingSessionFailure = false;
+    // private pendingKernelChangeFailure = false;
 
     constructor(serviceManager: IServiceManager) {
         // Make our process service factory always return this item
@@ -117,7 +116,7 @@ export class MockJupyterManager implements IJupyterSessionManager {
         this.interpreterService
             .setup((i) => i.getInterpreterDetails(TypeMoq.It.isAnyString()))
             .returns((p) => {
-                const found = this.installedInterpreters.find((i) => i.path === p);
+                const found = this.installedInterpreters.find((i) => areInterpreterPathsSame(i.path, p));
                 if (found) {
                     return Promise.resolve(found);
                 }
@@ -126,7 +125,7 @@ export class MockJupyterManager implements IJupyterSessionManager {
         this.interpreterService
             .setup((i) => i.updateInterpreter(TypeMoq.It.isAny(), TypeMoq.It.isAny()))
             .returns((_r, p) => {
-                const found = this.installedInterpreters.find((i) => i.path === p);
+                const found = this.installedInterpreters.find((i) => areInterpreterPathsSame(i.path, p));
                 if (found) {
                     this.activeInterpreter = found;
                 }
@@ -213,25 +212,22 @@ export class MockJupyterManager implements IJupyterSessionManager {
     public get onRestartSessionUsed() {
         return this.restartSessionUsedEvent.event;
     }
-    public getConnInfo(): IJupyterConnection {
-        return this.connInfo!;
-    }
 
     public makeActive(interpreter: PythonEnvironment) {
         this.activeInterpreter = interpreter;
     }
 
-    public getCurrentSession(): MockJupyterSession | undefined {
+    public getCurrentSession(): IJupyterSession | undefined {
         return this.currentSession;
     }
 
-    public forcePendingIdleFailure() {
-        this.pendingSessionFailure = true;
-    }
+    // public forcePendingIdleFailure() {
+    //     this.pendingSessionFailure = true;
+    // }
 
-    public forcePendingKernelChangeFailure() {
-        this.pendingKernelChangeFailure = true;
-    }
+    // public forcePendingKernelChangeFailure() {
+    //     this.pendingKernelChangeFailure = true;
+    // }
 
     public getRunningKernels(): Promise<IJupyterKernel[]> {
         return Promise.resolve([]);
@@ -301,120 +297,118 @@ export class MockJupyterManager implements IJupyterSessionManager {
             evalue: message,
             traceback: traceback ? traceback : [message]
         };
-
-        this.addCell(code, result);
+        const cell = createCodeCell(code);
+        cell.outputs = [result];
+        this.addCell(cell);
     }
 
     public addContinuousOutputCell(
         code: string,
-        resultGenerator: (cancelToken: CancellationToken) => Promise<{ result: string; haveMore: boolean }>
+        resultGenerator: (cancelToken: CancellationToken) => Promise<{ result: string; haveMore: boolean }>,
+        doNotUseICell?: boolean
     ) {
-        const cells = generateCells(undefined, code, Uri.file('foo.py').fsPath, 1, true, uuid());
+        const cells = doNotUseICell
+            ? [createCodeCell(code)]
+            : generateCells(undefined, code, Uri.file('foo.py').fsPath, true);
         cells.forEach((c) => {
-            const key = concatMultilineString(c.data.source).replace(LineFeedRegEx, '').toLowerCase();
-            if (c.data.cell_type === 'code') {
-                const taggedResult = {
-                    output_type: 'generator'
-                };
-                const data: nbformat.ICodeCell = c.data as nbformat.ICodeCell;
-                data.outputs = [...data.outputs, taggedResult];
-
-                // Tag on our extra data
-                (taggedResult as any).resultGenerator = async (t: CancellationToken) => {
-                    const result = await resultGenerator(t);
-                    return {
-                        result: this.createStreamResult(result.result),
-                        haveMore: result.haveMore
+            const source = doNotUseICell ? (c as nbformat.ICodeCell).source : (c as ICell).data.source;
+            const key = concatMultilineString(source).replace(LineFeedRegEx, '').toLowerCase();
+            if (doNotUseICell) {
+                const cell = c as nbformat.ICodeCell;
+                if (cell.cell_type === 'code') {
+                    const taggedResult = {
+                        output_type: 'generator'
                     };
-                };
+                    cell.outputs = [...cell.outputs, taggedResult];
 
-                // Save in the cell.
-                c.data = data;
-            }
-
-            // Save each in our dictionary for future use.
-            // Note: Our entire setup is recreated each test so this dictionary
-            // should be unique per test
-            this.cellDictionary[key] = c;
-        });
-    }
-
-    public addInputCell(
-        code: string,
-        result?:
-            | undefined
-            | string
-            | number
-            | nbformat.IUnrecognizedOutput
-            | nbformat.IExecuteResult
-            | nbformat.IDisplayData
-            | nbformat.IStream
-            | nbformat.IError,
-        mimeType?: string
-    ) {
-        const cells = generateCells(undefined, code, Uri.file('foo.py').fsPath, 1, true, uuid());
-        cells.forEach((c) => {
-            const key = concatMultilineString(c.data.source).replace(LineFeedRegEx, '').toLowerCase();
-            if (c.data.cell_type === 'code') {
-                const taggedResult = {
-                    output_type: 'input'
-                };
-                const massagedResult = this.massageCellResult(result, mimeType);
-                const data: nbformat.ICodeCell = c.data as nbformat.ICodeCell;
-                if (result) {
-                    data.outputs = [...data.outputs, taggedResult, massagedResult];
-                } else {
+                    // Tag on our extra data
+                    (taggedResult as any).resultGenerator = async (t: CancellationToken) => {
+                        const result = await resultGenerator(t);
+                        return {
+                            result: this.createStreamResult(result.result),
+                            haveMore: result.haveMore
+                        };
+                    };
+                }
+            } else {
+                const cell = c as ICell;
+                if (cell.data.cell_type === 'code') {
+                    const taggedResult = {
+                        output_type: 'generator'
+                    };
+                    const data: nbformat.ICodeCell = cell.data as nbformat.ICodeCell;
                     data.outputs = [...data.outputs, taggedResult];
-                }
-                // Save in the cell.
-                c.data = data;
-            }
 
-            // Save each in our dictionary for future use.
-            // Note: Our entire setup is recreated each test so this dictionary
-            // should be unique per test
-            this.cellDictionary[key] = c;
-        });
-    }
+                    // Tag on our extra data
+                    (taggedResult as any).resultGenerator = async (t: CancellationToken) => {
+                        const result = await resultGenerator(t);
+                        return {
+                            result: this.createStreamResult(result.result),
+                            haveMore: result.haveMore
+                        };
+                    };
 
-    public addCell(
-        code: string,
-        result?:
-            | undefined
-            | string
-            | number
-            | nbformat.IUnrecognizedOutput
-            | nbformat.IExecuteResult
-            | nbformat.IDisplayData
-            | nbformat.IStream
-            | nbformat.IError
-            | string[],
-        mimeType?: string | string[]
-    ) {
-        const cells = generateCells(undefined, code, Uri.file('foo.py').fsPath, 1, true, uuid());
-        cells.forEach((c) => {
-            const cellMatcher = new CellMatcher();
-            const key = cellMatcher
-                .stripFirstMarker(concatMultilineString(c.data.source))
-                .replace(LineFeedRegEx, '')
-                .toLowerCase();
-            if (c.data.cell_type === 'code') {
-                if (mimeType && Array.isArray(mimeType) && Array.isArray(result)) {
-                    for (let i = 0; i < mimeType.length; i = i + 1) {
-                        this.addCellOutput(c, result[i], mimeType[i]);
-                    }
-                } else if (!Array.isArray(result) && !Array.isArray(mimeType)) {
-                    this.addCellOutput(c, result, mimeType);
+                    // Save in the cell.
+                    cell.data = data;
                 }
             }
 
             // Save each in our dictionary for future use.
             // Note: Our entire setup is recreated each test so this dictionary
             // should be unique per test
-            this.cellDictionary[key] = c;
+            this.cellDictionary[key] = c as any;
         });
     }
 
+    // public addInputICell(
+    //     code: string,
+    //     result?:
+    //         | undefined
+    //         | string
+    //         | number
+    //         | nbformat.IUnrecognizedOutput
+    //         | nbformat.IExecuteResult
+    //         | nbformat.IDisplayData
+    //         | nbformat.IStream
+    //         | nbformat.IError,
+    //     mimeType?: string
+    // ) {
+    //     const cells = generateCells(undefined, code, Uri.file('foo.py').fsPath, 1, true, uuid());
+    //     cells.forEach((c) => {
+    //         const key = concatMultilineString(c.data.source).replace(LineFeedRegEx, '').toLowerCase();
+    //         if (c.data.cell_type === 'code') {
+    //             const taggedResult = {
+    //                 output_type: 'input'
+    //             };
+    //             const massagedResult = this.massageCellResult(result, mimeType);
+    //             const data: nbformat.ICodeCell = c.data as nbformat.ICodeCell;
+    //             if (result) {
+    //                 data.outputs = [...data.outputs, taggedResult, massagedResult];
+    //             } else {
+    //                 data.outputs = [...data.outputs, taggedResult];
+    //             }
+    //             // Save in the cell.
+    //             c.data = data;
+    //         }
+
+    //         // Save each in our dictionary for future use.
+    //         // Note: Our entire setup is recreated each test so this dictionary
+    //         // should be unique per test
+    //         this.cellDictionary[key] = c as any;
+    //     });
+    // }
+
+    public addCell(cell: nbformat.IBaseCell | string, output?: string | number | any, mimeType?: any) {
+        if (typeof cell === 'string') {
+            cell = createCodeCell(cell);
+        }
+        if (typeof output !== 'undefined') {
+            const outputItem = this.massageCellResult(output, mimeType);
+            (cell as nbformat.ICodeCell).outputs = [outputItem];
+        }
+        const key = concatMultilineString(cell.source).replace(LineFeedRegEx, '').toLowerCase();
+        this.cellDictionary[key] = cell as any;
+    }
     public setWaitTime(timeout: number | undefined) {
         this.sessionTimeout = timeout;
     }
@@ -425,16 +419,12 @@ export class MockJupyterManager implements IJupyterSessionManager {
         }
     }
 
-    public async initialize(connInfo: IJupyterConnection): Promise<void> {
-        this.connInfo = connInfo;
-    }
-
     public startNew(
         _resource: Resource,
-        _kernelConnection: KernelConnectionMetadata | undefined,
+        _kernelConnection: KernelConnectionMetadata,
         _workingDirectory: string,
         cancelToken?: CancellationToken
-    ): Promise<IJupyterSession> {
+    ): Promise<JupyterSession> {
         if (this.sessionTimeout && cancelToken) {
             const localTimeout = this.sessionTimeout;
             return Cancellation.race(async () => {
@@ -456,40 +446,18 @@ export class MockJupyterManager implements IJupyterSessionManager {
         this.addCell('import sys\nsys.path[0]', path.join(workingDir));
     }
 
-    private addCellOutput(
-        cell: ICell,
-        result?:
-            | undefined
-            | string
-            | number
-            | nbformat.IUnrecognizedOutput
-            | nbformat.IExecuteResult
-            | nbformat.IDisplayData
-            | nbformat.IStream
-            | nbformat.IError,
-        mimeType?: string
-    ) {
-        const massagedResult = this.massageCellResult(result, mimeType);
-        const data: nbformat.ICodeCell = cell.data as nbformat.ICodeCell;
-        if (result) {
-            data.outputs = [...data.outputs, massagedResult];
-        } else {
-            data.outputs = [...data.outputs];
-        }
-        cell.data = data;
-    }
-
-    private createNewSession(): MockJupyterSession {
-        const sessionFailure = this.pendingSessionFailure;
-        const kernelChangeFailure = this.pendingKernelChangeFailure;
-        this.pendingSessionFailure = false;
-        this.pendingKernelChangeFailure = false;
-        this.currentSession = new MockJupyterSession(
-            this.cellDictionary,
-            MockJupyterTimeDelay,
-            sessionFailure,
-            kernelChangeFailure
-        );
+    private createNewSession(): JupyterSession {
+        // const sessionFailure = this.pendingSessionFailure;
+        // const kernelChangeFailure = this.pendingKernelChangeFailure;
+        // this.pendingSessionFailure = false;
+        // this.pendingKernelChangeFailure = false;
+        // this.currentSession = new MockJupyterSession(
+        //     this.cellDictionary,
+        //     MockJupyterTimeDelay,
+        //     sessionFailure,
+        //     kernelChangeFailure
+        // );
+        this.currentSession = instance(mock<JupyterSession>());
         return this.currentSession;
     }
 

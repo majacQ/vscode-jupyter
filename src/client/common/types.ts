@@ -68,7 +68,14 @@ export enum Product {
     notebook = 20,
     kernelspec = 21,
     nbconvert = 22,
-    pandas = 23
+    pandas = 23,
+    pip = 27
+}
+
+export enum ProductInstallStatus {
+    Installed,
+    NotInstalled,
+    NeedsUpgrade
 }
 
 export enum ModuleNamePurpose {
@@ -79,12 +86,12 @@ export enum ModuleNamePurpose {
 export const IInstaller = Symbol('IInstaller');
 
 export interface IInstaller {
-    promptToInstall(product: Product, resource: InterpreterUri, cancel?: CancellationToken): Promise<InstallerResponse>;
     install(
         product: Product,
         resource: InterpreterUri,
         cancel?: CancellationToken,
-        reInstallAndUpdate?: boolean
+        reInstallAndUpdate?: boolean,
+        installPipIfRequired?: boolean
     ): Promise<InstallerResponse>;
     isInstalled(product: Product, resource: InterpreterUri): Promise<boolean | undefined>;
     translateProductToModuleName(product: Product, purpose: ModuleNamePurpose): string;
@@ -103,7 +110,6 @@ export interface IPathUtils {
      * @memberof IPathUtils
      */
     readonly separator: string;
-    getPathVariableName(): 'Path' | 'PATH';
     basename(pathValue: string, ext?: string): string;
     getDisplayName(pathValue: string, cwd?: string): string;
 }
@@ -144,13 +150,14 @@ export interface IJupyterSettings {
     askForLargeDataFrames: boolean;
     readonly enableAutoMoveToNextCell: boolean;
     readonly askForKernelRestart: boolean;
-    readonly enablePlotViewer: boolean;
+    readonly generateSVGPlots: boolean;
     readonly codeLenses: string;
     readonly debugCodeLenses: string;
     readonly debugpyDistPath: string;
     readonly stopOnFirstLineWhileDebugging: boolean;
     readonly textOutputLimit: number;
     readonly magicCommandsAsComments: boolean;
+    readonly pythonExportMethod: string;
     readonly stopOnError: boolean;
     readonly remoteDebuggerPort: number;
     readonly colorizeInputBox: boolean;
@@ -168,7 +175,12 @@ export interface IJupyterSettings {
     readonly alwaysScrollOnNewCell: boolean;
     readonly interactiveWindowMode: InteractiveWindowMode;
     readonly disableZMQSupport: boolean;
+    readonly disablePythonDaemon: boolean;
     readonly variableTooltipFields: IVariableTooltipFields;
+    readonly showVariableViewWhenDebugging: boolean;
+    readonly newCellOnRunLast: boolean;
+    readonly pylanceHandlesNotebooks?: boolean;
+    readonly pythonCompletionTriggerCharacters?: string;
 }
 
 export interface IVariableTooltipFields {
@@ -181,7 +193,7 @@ export interface IWatchableJupyterSettings extends IJupyterSettings {
     readonly onDidChange: Event<void>;
 }
 
-export type LoggingLevelSettingType = 'off' | 'error' | 'warn' | 'info' | 'debug';
+export type LoggingLevelSettingType = 'off' | 'error' | 'warn' | 'info' | 'debug' | 'verbose';
 
 export interface ILoggingSettings {
     readonly level: LogLevel | 'off';

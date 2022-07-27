@@ -16,7 +16,7 @@
 
 ### Prerequisites
 
-1. [Node.js](https://nodejs.org/) 12.14.1
+1. [Node.js](https://nodejs.org/) 14.16.0
 1. [Python](https://www.python.org/) 2.7 or later
 1. Windows, macOS, or Linux
 1. [Visual Studio Code](https://code.visualstudio.com/)
@@ -35,10 +35,12 @@ npm ci
 python3 -m venv .venv
 # Activate the virtual environment as appropriate for your shell, For example, on bash it's ...
 source .venv/bin/activate
+# and in Windows cmd or PowerShell
+.venv\Scripts\activate
 # The Python code in the extension is formatted using Black.
 python -m pip install black
 # The Python code required in the extension
-python -m pip install -r requirements.txt
+python -m pip --disable-pip-version-check install -t ./pythonFiles/lib/python --no-cache-dir --implementation py --no-deps --upgrade -r ./requirements.txt
 ```
 
 ### Incremental Build
@@ -241,7 +243,7 @@ than the next sprint from when it was submitted (see
 
 ### Release cycle
 
-Planning is done as monthly releases. 
+Planning is done as monthly releases.
 
 The extension aims to do a new release once a month. A
 [release plan](https://github.com/Microsoft/vscode-jupyter/labels/release%20plan)

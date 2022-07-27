@@ -14,7 +14,6 @@ import {
     IDocumentManager,
     IWorkspaceService
 } from '../../common/application/types';
-import { UseVSCodeNotebookEditorApi } from '../../common/constants';
 import { traceError } from '../../common/logger';
 import { IFileSystem } from '../../common/platform/types';
 
@@ -34,10 +33,11 @@ import {
     ICodeWatcher,
     IDataScienceCodeLensProvider,
     IDataScienceCommandListener,
+    IDataScienceErrorHandler,
+    IInteractiveWindowProvider,
     IJupyterServerUriStorage,
     IJupyterVariableDataProviderFactory,
-    IJupyterVariables,
-    INotebookEditorProvider
+    IJupyterVariables
 } from '../types';
 import { JupyterCommandLineSelectorCommand } from './commandLineSelector';
 import { ExportCommands } from './exportCommands';
@@ -59,7 +59,6 @@ export class CommandRegistry implements IDisposable {
         @inject(NotebookCommands) private readonly notebookCommands: NotebookCommands,
         @inject(JupyterCommandLineSelectorCommand)
         private readonly commandLineCommand: JupyterCommandLineSelectorCommand,
-        @inject(INotebookEditorProvider) private notebookEditorProvider: INotebookEditorProvider,
         @inject(IDebugService) private debugService: IDebugService,
         @inject(IConfigurationService) private configService: IConfigurationService,
         @inject(IApplicationShell) private appShell: IApplicationShell,
@@ -71,9 +70,10 @@ export class CommandRegistry implements IDisposable {
         @inject(IDataViewerFactory) private readonly dataViewerFactory: IDataViewerFactory,
         @inject(IJupyterServerUriStorage) private readonly serverUriStorage: IJupyterServerUriStorage,
         @inject(IJupyterVariables) @named(Identifiers.DEBUGGER_VARIABLES) private variableProvider: IJupyterVariables,
-        @inject(UseVSCodeNotebookEditorApi) private readonly useNativeNotebook: boolean,
         @inject(NotebookCreator) private readonly nativeNotebookCreator: NotebookCreator,
-        @inject(IWorkspaceService) private readonly workspace: IWorkspaceService
+        @inject(IWorkspaceService) private readonly workspace: IWorkspaceService,
+        @inject(IInteractiveWindowProvider) private readonly interactiveWindowProvider: IInteractiveWindowProvider,
+        @inject(IDataScienceErrorHandler) private readonly errorHandler: IDataScienceErrorHandler
     ) {
         this.disposables.push(this.serverSelectedCommand);
         this.disposables.push(this.notebookCommands);
@@ -144,6 +144,7 @@ export class CommandRegistry implements IDisposable {
         this.registerCommand(Commands.DebugStop, this.debugStop);
         this.registerCommand(Commands.DebugCurrentCellPalette, this.debugCurrentCellFromCursor);
         this.registerCommand(Commands.OpenVariableView, this.openVariableView);
+        this.registerCommand(Commands.OpenOutlineView, this.openOutlineView);
         this.registerCommand(Commands.ShowDataViewer, this.onVariablePanelShowDataViewerRequest);
         this.registerCommand(Commands.RunToLine, this.runToLine);
         this.registerCommand(Commands.RunFromLine, this.runFromLine);
@@ -355,9 +356,19 @@ export class CommandRegistry implements IDisposable {
     }
 
     @captureTelemetry(Telemetry.DebugStop)
-    private async debugStop(): Promise<void> {
+    private async debugStop(uri: Uri): Promise<void> {
         // Make sure that we are in debug mode
         if (this.debugService.activeDebugSession) {
+            // Attempt to get the interactive window for this file
+            const iw = this.interactiveWindowProvider.windows.find((w) => w.owner?.toString() == uri.toString());
+            if (iw) {
+                const kernel = await iw.kernelPromise;
+                if (kernel) {
+                    // If we have a matching iw, then stop current execution
+                    await kernel.interrupt();
+                }
+            }
+
             void this.commandManager.executeCommand('workbench.action.debug.stop');
         }
     }
@@ -478,11 +489,7 @@ export class CommandRegistry implements IDisposable {
     }
 
     private async createNewNotebook(): Promise<void> {
-        if (this.useNativeNotebook) {
-            await this.nativeNotebookCreator.createNewNotebook();
-        } else {
-            await this.notebookEditorProvider.createNew();
-        }
+        await this.nativeNotebookCreator.createNewNotebook();
     }
 
     private viewJupyterOutput() {
@@ -526,6 +533,11 @@ export class CommandRegistry implements IDisposable {
         // It's the given way to focus a single view so using that here, note that it needs to match the view ID
         return this.commandManager.executeCommand('jupyterViewVariables.focus');
     }
+
+    // Open the VS Code outline view
+    private async openOutlineView(): Promise<void> {
+        return this.commandManager.executeCommand('outline.focus');
+    }
     private async onVariablePanelShowDataViewerRequest(request: IShowDataViewerFromVariablePanel) {
         sendTelemetryEvent(EventName.OPEN_DATAVIEWER_FROM_VARIABLE_WINDOW_REQUEST);
         if (this.debugService.activeDebugSession) {
@@ -547,7 +559,7 @@ export class CommandRegistry implements IDisposable {
             } catch (e) {
                 sendTelemetryEvent(EventName.OPEN_DATAVIEWER_FROM_VARIABLE_WINDOW_ERROR, undefined, undefined, e);
                 traceError(e);
-                void this.appShell.showErrorMessage(e.toString());
+                void this.errorHandler.handleError(e);
             }
         }
     }

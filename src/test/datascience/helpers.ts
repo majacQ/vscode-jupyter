@@ -2,21 +2,19 @@
 // Licensed under the MIT License.
 
 'use strict';
+import { assert } from 'chai';
 import { noop } from 'lodash';
-import * as path from 'path';
-import { Uri } from 'vscode';
-import { ICommandManager } from '../../client/common/application/types';
+import * as vscode from 'vscode';
 import { traceInfo } from '../../client/common/logger';
 import { IJupyterSettings } from '../../client/common/types';
-import { Commands } from '../../client/datascience/constants';
+import { InteractiveWindow } from '../../client/datascience/interactive-window/interactiveWindow';
+import { InteractiveWindowProvider } from '../../client/datascience/interactive-window/interactiveWindowProvider';
+import { IInteractiveWindowProvider } from '../../client/datascience/types';
 import {
-    AskForSaveResult,
-    NativeEditorOldWebView
-} from '../../client/datascience/interactive-ipynb/nativeEditorOldWebView';
-import { INotebookEditorProvider } from '../../client/datascience/types';
-import { IServiceContainer } from '../../client/ioc/types';
-import { CommandSource } from '../../client/testing/common/constants';
-import { waitForCondition } from '../common';
+    createTemporaryFile,
+    waitForCellExecutionToComplete,
+    waitForExecutionCompletedSuccessfully
+} from './notebook/helper';
 
 // The default base set of data science settings to use
 export function defaultDataScienceSettings(): IJupyterSettings {
@@ -49,7 +47,7 @@ export function defaultDataScienceSettings(): IJupyterSettings {
         variableExplorerExclude: 'module;function;builtin_function_or_method',
         codeRegularExpression: '^(#\\s*%%|#\\s*\\<codecell\\>|#\\s*In\\[\\d*?\\]|#\\s*In\\[ \\])',
         markdownRegularExpression: '^(#\\s*%%\\s*\\[markdown\\]|#\\s*\\<markdowncell\\>)',
-        enablePlotViewer: true,
+        generateSVGPlots: false,
         runStartupCommands: '',
         debugJustMyCode: true,
         variableQueries: [],
@@ -81,33 +79,61 @@ export function writeDiffSnapshot(_snapshot: any, _prefix: string) {
     // fs.writeFile(file, JSON.stringify(diff), { encoding: 'utf-8' }).ignoreErrors();
 }
 
-export async function openNotebook(
-    serviceContainer: IServiceContainer,
-    ipynbFile: string,
-    options: { ignoreSavingOldNotebooks?: boolean } = { ignoreSavingOldNotebooks: true }
-) {
+export async function openNotebook(ipynbFile: string) {
     traceInfo(`Opening notebook ${ipynbFile}`);
-    const cmd = serviceContainer.get<ICommandManager>(ICommandManager);
-    await cmd.executeCommand(Commands.OpenNotebook, Uri.file(ipynbFile), undefined, CommandSource.commandPalette);
-    const editorProvider = serviceContainer.get<INotebookEditorProvider>(INotebookEditorProvider);
-    traceInfo('Wait for notebook to be the active editor');
-    await waitForCondition(
-        async () =>
-            editorProvider.editors.length > 0 &&
-            !!editorProvider.activeEditor &&
-            editorProvider.activeEditor.file.fsPath.endsWith(path.basename(ipynbFile)),
-        30_000,
-        'Notebook not opened'
-    );
-
-    if (
-        options.ignoreSavingOldNotebooks &&
-        editorProvider.activeEditor &&
-        editorProvider.activeEditor instanceof NativeEditorOldWebView
-    ) {
-        // We don't care about changes, no need to save them.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (editorProvider.activeEditor as any).askForSave = () => Promise.resolve(AskForSaveResult.No);
-    }
+    const uri = vscode.Uri.file(ipynbFile);
+    const nb = await vscode.workspace.openNotebookDocument(uri);
+    await vscode.window.showNotebookDocument(nb);
     traceInfo(`Opened notebook ${ipynbFile}`);
+}
+
+export async function createStandaloneInteractiveWindow(interactiveWindowProvider: InteractiveWindowProvider) {
+    const activeInteractiveWindow = (await interactiveWindowProvider.getOrCreate(undefined)) as InteractiveWindow;
+    return activeInteractiveWindow;
+}
+
+export async function insertIntoInputEditor(source: string) {
+    // Add code to the input box
+    await vscode.window.activeTextEditor?.edit((editBuilder) => {
+        editBuilder.insert(new vscode.Position(0, 0), source);
+    });
+    return vscode.window.activeTextEditor;
+}
+
+export async function submitFromPythonFile(
+    interactiveWindowProvider: IInteractiveWindowProvider,
+    source: string,
+    disposables: vscode.Disposable[]
+) {
+    const tempFile = await createTemporaryFile({ contents: source, extension: '.py' });
+    disposables.push(tempFile);
+    const untitledPythonFile = await vscode.workspace.openTextDocument(tempFile.file);
+    await vscode.window.showTextDocument(untitledPythonFile);
+    const activeInteractiveWindow = (await interactiveWindowProvider.getOrCreate(
+        untitledPythonFile.uri
+    )) as InteractiveWindow;
+    await activeInteractiveWindow.addCode(source, untitledPythonFile.uri, 0);
+    return { activeInteractiveWindow, untitledPythonFile };
+}
+
+export async function waitForLastCellToComplete(interactiveWindow: InteractiveWindow, errorsOkay?: boolean) {
+    const notebookDocument = vscode.workspace.notebookDocuments.find(
+        (doc) => doc.uri.toString() === interactiveWindow?.notebookUri?.toString()
+    );
+    const cells = notebookDocument?.getCells();
+    assert.ok(notebookDocument !== undefined, 'Interactive window notebook document not found');
+    let codeCell: vscode.NotebookCell | undefined;
+    for (let i = cells!.length - 1; i >= 0; i -= 1) {
+        if (cells![i].kind === vscode.NotebookCellKind.Code) {
+            codeCell = cells![i];
+            break;
+        }
+    }
+    assert.ok(codeCell !== undefined, 'No code cell found in interactive window notebook document');
+    if (errorsOkay) {
+        await waitForCellExecutionToComplete(codeCell!);
+    } else {
+        await waitForExecutionCompletedSuccessfully(codeCell!);
+    }
+    return codeCell!;
 }

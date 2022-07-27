@@ -9,10 +9,8 @@ import { env, ExtensionMode, OutputChannel, UIKind, window, workspace } from 'vs
 import { registerTypes as activationRegisterTypes } from './activation/serviceRegistry';
 import { IExtensionActivationManager } from './activation/types';
 import { registerTypes as registerApiTypes } from './api/serviceRegistry';
-import { AmlComputeContext } from './common/amlContext';
 import { IApplicationEnvironment, ICommandManager } from './common/application/types';
-import { isTestExecution, STANDARD_OUTPUT_CHANNEL, UseProposedApi } from './common/constants';
-import { Experiments } from './common/experiments/groups';
+import { isTestExecution, STANDARD_OUTPUT_CHANNEL } from './common/constants';
 import { registerTypes as installerRegisterTypes } from './common/installer/serviceRegistry';
 import { registerTypes as platformRegisterTypes } from './common/platform/serviceRegistry';
 import { IFileSystem } from './common/platform/types';
@@ -100,15 +98,11 @@ async function activateLegacy(
     const experimentService = serviceContainer.get<IExperimentService>(IExperimentService);
     // This must be done first, this guarantees all experiment information has loaded & all telemetry will contain experiment info.
     await experimentService.activate();
-    const amlCompute = serviceContainer.get<AmlComputeContext>(AmlComputeContext);
     experimentService.logExperiments();
 
-    let useVSCodeNotebookAPI =
-        amlCompute.isAmlCompute || (await experimentService.inExperiment(Experiments.NativeNotebook));
+    let useVSCodeNotebookAPI = true;
 
     const applicationEnv = serviceManager.get<IApplicationEnvironment>(IApplicationEnvironment);
-    const enableProposedApi = applicationEnv.packageJson.enableProposedApi || useVSCodeNotebookAPI;
-    serviceManager.addSingletonInstance<boolean>(UseProposedApi, enableProposedApi);
     // Feature specific registrations.
     variableRegisterTypes(serviceManager);
     installerRegisterTypes(serviceManager);
@@ -118,7 +112,11 @@ async function activateLegacy(
     // We should start logging using the log level as soon as possible, so set it as soon as we can access the level.
     // `IConfigurationService` may depend any of the registered types, so doing it after all registrations are finished.
     // XXX Move this *after* abExperiments is activated?
-    setLoggingLevel(configuration.getSettings().logging.level);
+    const settings = configuration.getSettings();
+    setLoggingLevel(settings.logging.level);
+    settings.onDidChange(() => {
+        setLoggingLevel(settings.logging.level);
+    });
 
     // Register datascience types after experiments have loaded.
     // To ensure we can register types based on experiments.

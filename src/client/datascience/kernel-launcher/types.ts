@@ -2,10 +2,9 @@
 // Licensed under the MIT License.
 'use strict';
 
-import type { nbformat } from '@jupyterlab/coreutils';
+import type * as nbformat from '@jupyterlab/nbformat';
 import { SpawnOptions } from 'child_process';
 import { CancellationToken, Event } from 'vscode';
-import { BaseError, WrappedError } from '../../common/errors/types';
 import { ObservableExecutionResult } from '../../common/process/types';
 import { IAsyncDisposable, IDisposable, Resource } from '../../common/types';
 import {
@@ -14,7 +13,7 @@ import {
     LocalKernelConnectionMetadata,
     PythonKernelConnectionMetadata
 } from '../jupyter/kernels/types';
-import { INotebookProviderConnection, KernelInterpreterDependencyResponse } from '../types';
+import { INotebookProviderConnection } from '../types';
 
 export const IKernelLauncher = Symbol('IKernelLauncher');
 export interface IKernelLauncher {
@@ -48,6 +47,15 @@ export interface IKernelProcess extends IAsyncDisposable {
      * This event is triggered if the process is exited
      */
     readonly exited: Event<{ exitCode?: number; reason?: string }>;
+    /**
+     * Whether we can interrupt this kernel process.
+     * If not possible, send a shell message to the underlying kernel.
+     */
+    readonly canInterrupt: boolean;
+    /**
+     * Interrupts the Kernel process.
+     * This method is to be used only if `canInterrupt` is true.
+     */
     interrupt(): Promise<void>;
 }
 
@@ -58,7 +66,15 @@ export interface ILocalKernelFinder {
         option?: nbformat.INotebookMetadata,
         cancelToken?: CancellationToken
     ): Promise<LocalKernelConnectionMetadata | undefined>;
-    listKernels(resource: Resource, cancelToken?: CancellationToken): Promise<LocalKernelConnectionMetadata[]>;
+    listNonPythonKernels(
+        cancelToken?: CancellationToken,
+        useCache?: 'useCache' | 'ignoreCache'
+    ): Promise<LocalKernelConnectionMetadata[]>;
+    listKernels(
+        resource: Resource,
+        cancelToken?: CancellationToken,
+        useCache?: 'useCache' | 'ignoreCache'
+    ): Promise<LocalKernelConnectionMetadata[]>;
     getKernelSpecRootPath(): Promise<string | undefined>;
 }
 
@@ -84,44 +100,4 @@ export interface IPythonKernelDaemon extends IDisposable {
     kill(): Promise<void>;
     preWarm(): Promise<void>;
     start(moduleName: string, args: string[], options: SpawnOptions): Promise<ObservableExecutionResult<string>>;
-}
-
-export class KernelDiedError extends WrappedError {
-    constructor(message: string, public readonly stdErr: string, originalException?: Error) {
-        super(message, originalException);
-    }
-}
-
-export class KernelProcessExited extends BaseError {
-    constructor(public readonly exitCode: number = -1) {
-        super('kerneldied', 'Kernel process Exited');
-    }
-}
-
-export class PythonKernelDiedError extends BaseError {
-    public readonly exitCode: number;
-    public readonly reason?: string;
-    constructor(options: { exitCode: number; reason?: string; stdErr: string } | { error: Error; stdErr: string }) {
-        const message =
-            'exitCode' in options
-                ? `Kernel died with exit code ${options.exitCode}. ${options.reason}`
-                : `Kernel died ${options.error.message}`;
-        super('kerneldied', message);
-        this.stdErr = options.stdErr;
-        if ('exitCode' in options) {
-            this.exitCode = options.exitCode;
-            this.reason = options.reason;
-        } else {
-            this.exitCode = -1;
-            this.reason = options.error.message;
-            this.stack = options.error.stack;
-            this.name = options.error.name;
-        }
-    }
-}
-
-export class IpyKernelNotInstalledError extends BaseError {
-    constructor(message: string, public reason: KernelInterpreterDependencyResponse) {
-        super('noipykernel', message);
-    }
 }

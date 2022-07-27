@@ -4,10 +4,10 @@
 'use strict';
 
 import { inject, injectable } from 'inversify';
-import * as localize from '../../common/utils/localize';
+import { SessionDisposedError } from '../errors/sessionDisposedError';
 import {
     ConnectNotebookProviderOptions,
-    GetNotebookOptions,
+    NotebookCreationOptions,
     IJupyterConnection,
     IJupyterNotebookProvider,
     IJupyterServerProvider,
@@ -30,39 +30,20 @@ export class JupyterNotebookProvider implements IJupyterNotebookProvider {
         return server?.getConnectionInfo();
     }
 
-    public async createNotebook(options: GetNotebookOptions): Promise<INotebook> {
+    public async createNotebook(options: NotebookCreationOptions): Promise<INotebook> {
         // Make sure we have a server
         const server = await this.serverProvider.getOrCreateServer({
-            getOnly: options.getOnly,
+            getOnly: false,
             disableUI: options.disableUI,
             resource: options.resource,
             token: options.token
         });
 
         if (server) {
-            return server.createNotebook(
-                options.resource,
-                options.identity,
-                options.metadata,
-                options.kernelConnection,
-                options.token
-            );
+            return server.createNotebook(options.resource, options.kernelConnection, options.token);
         }
         // We want createNotebook to always return a notebook promise, so if we don't have a server
         // here throw our generic server disposed message that we use in server creatio n
-        throw new Error(localize.DataScience.sessionDisposed());
-    }
-    public async getNotebook(options: GetNotebookOptions): Promise<INotebook | undefined> {
-        const server = await this.serverProvider.getOrCreateServer({
-            getOnly: options.getOnly,
-            disableUI: options.disableUI,
-            token: options.token,
-            resource: options.resource,
-            metadata: options.metadata,
-            kernelConnection: options.kernelConnection
-        });
-        if (server) {
-            return server.getNotebook(options.identity, options.token);
-        }
+        throw new SessionDisposedError();
     }
 }

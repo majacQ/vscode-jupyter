@@ -60,6 +60,9 @@ import { noop } from '../../client/common/utils/misc';
 
 class MockCanvas implements CanvasRenderingContext2D {
     public canvas!: HTMLCanvasElement;
+    public getContextAttributes(): CanvasRenderingContext2DSettings {
+        throw new Error('Method not implemented.');
+    }
     public restore(): void {
         throw new Error('Method not implemented.');
     }
@@ -343,9 +346,6 @@ export function setUpDomEnvironment() {
     (global as any)['self'] = window;
     copyProps(window, global);
 
-    // Special case. Monaco needs queryCommandSupported
-    (global as any)['document'].queryCommandSupported = () => false;
-
     // Special case. Transform needs createRange
     (global as any)['document'].createRange = () => ({
         createContextualFragment: (str: string) => JSDOM.fragment(str),
@@ -428,17 +428,6 @@ export function setUpDomEnvironment() {
             }
         }
     };
-}
-
-export function setupTranspile() {
-    // Some special work for getting the monaco editor to work.
-    // We need to babel transpile some modules. Monaco-editor is not in commonJS format so imports
-    // can't be loaded.
-    require('@babel/register')({ plugins: ['@babel/transform-modules-commonjs'], only: [/monaco-editor/] });
-
-    // Special case for editor api. Webpack bundles editor.all.js as well. Tests don't.
-    require('monaco-editor/esm/vs/editor/editor.api');
-    require('monaco-editor/esm/vs/editor/editor.all');
 }
 
 function copyProps(src: any, target: any) {

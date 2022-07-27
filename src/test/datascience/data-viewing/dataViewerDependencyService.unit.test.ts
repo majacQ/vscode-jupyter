@@ -17,7 +17,6 @@ import { Common, DataScience } from '../../../client/common/utils/localize';
 import { DataViewerDependencyService } from '../../../client/datascience/data-viewing/dataViewerDependencyService';
 import { IInterpreterService } from '../../../client/interpreter/contracts';
 import { PythonEnvironment } from '../../../client/pythonEnvironments/info';
-import { InterpreterService } from '../../interpreters/interpreterService';
 
 suite('DataScience - DataViewerDependencyService', () => {
     let dependencyService: DataViewerDependencyService;
@@ -39,7 +38,7 @@ suite('DataScience - DataViewerDependencyService', () => {
         installer = mock(ProductInstaller);
         appShell = mock(ApplicationShell);
         pythonExecFactory = mock(PythonExecutionFactory);
-        interpreterService = mock(InterpreterService);
+        interpreterService = mock<IInterpreterService>();
 
         dependencyService = new DataViewerDependencyService(
             instance(appShell),
@@ -86,25 +85,36 @@ suite('DataScience - DataViewerDependencyService', () => {
             pythonExecService.exec(deepEqual(['-c', 'import pandas;print(pandas.__version__)']), anything())
         ).thenReject(new Error('Not Found'));
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        when(appShell.showErrorMessage(anything(), anything())).thenResolve(Common.install() as any);
+        when(appShell.showErrorMessage(anything(), anything(), anything())).thenResolve(Common.install() as any);
         when(installer.install(Product.pandas, interpreter, anything())).thenResolve();
 
         await dependencyService.checkAndInstallMissingDependencies(interpreter);
 
-        verify(appShell.showErrorMessage(DataScience.pandasRequiredForViewing(), Common.install())).once();
+        verify(
+            appShell.showErrorMessage(
+                DataScience.pandasRequiredForViewing(),
+                deepEqual({ modal: true }),
+                Common.install()
+            )
+        ).once();
         verify(installer.install(Product.pandas, interpreter, anything())).once();
     });
     test('Prompt to install pandas and throw error if user does not install pandas', async () => {
         when(
             pythonExecService.exec(deepEqual(['-c', 'import pandas;print(pandas.__version__)']), anything())
         ).thenReject(new Error('Not Found'));
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        when(appShell.showErrorMessage(anything(), anything())).thenResolve();
+        when(appShell.showErrorMessage(anything(), anything(), anything())).thenResolve();
 
         const promise = dependencyService.checkAndInstallMissingDependencies(interpreter);
 
         await assert.isRejected(promise, DataScience.pandasRequiredForViewing());
-        verify(appShell.showErrorMessage(DataScience.pandasRequiredForViewing(), Common.install())).once();
+        verify(
+            appShell.showErrorMessage(
+                DataScience.pandasRequiredForViewing(),
+                deepEqual({ modal: true }),
+                Common.install()
+            )
+        ).once();
         verify(installer.install(anything(), anything(), anything())).never();
     });
 });

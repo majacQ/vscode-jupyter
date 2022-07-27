@@ -67,13 +67,14 @@ export class JupyterSettings implements IWatchableJupyterSettings {
     public askForLargeDataFrames: boolean = false;
     public enableAutoMoveToNextCell: boolean = false;
     public askForKernelRestart: boolean = false;
-    public enablePlotViewer: boolean = false;
+    public generateSVGPlots: boolean = false;
     public codeLenses: string = '';
     public debugCodeLenses: string = '';
     public debugpyDistPath: string = '';
     public stopOnFirstLineWhileDebugging: boolean = false;
     public textOutputLimit: number = 0;
     public magicCommandsAsComments: boolean = false;
+    public pythonExportMethod: string = 'direct';
     public stopOnError: boolean = false;
     public remoteDebuggerPort: number = 0;
     public colorizeInputBox: boolean = false;
@@ -91,7 +92,14 @@ export class JupyterSettings implements IWatchableJupyterSettings {
     public interactiveWindowMode: InteractiveWindowMode = 'multiple';
     // Hidden settings not surfaced in package.json
     public disableZMQSupport: boolean = false;
+    // Hidden settings not surfaced in package.json
+    public disablePythonDaemon: boolean = false;
     public verboseLogging: boolean = false;
+    public showVariableViewWhenDebugging: boolean = true;
+    public newCellOnRunLast: boolean = true;
+    public pylanceHandlesNotebooks: boolean = false;
+    public pythonCompletionTriggerCharacters: string = '';
+
     public variableTooltipFields: IVariableTooltipFields = {
         python: {
             Tensor: ['shape', 'dtype', 'device']
@@ -272,6 +280,9 @@ function convertSettingTypeToLogLevel(setting: LoggingLevelSettingType | undefin
         }
         case 'debug': {
             return LogLevel.Debug;
+        }
+        case 'verbose': {
+            return LogLevel.Trace;
         }
         default: {
             return LogLevel.Error;

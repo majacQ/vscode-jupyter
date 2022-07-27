@@ -1,4 +1,4 @@
-import { nbformat } from '@jupyterlab/coreutils';
+import type * as nbformat from '@jupyterlab/nbformat';
 import { inject, injectable } from 'inversify';
 import * as os from 'os';
 import * as path from 'path';
@@ -6,14 +6,10 @@ import * as uuid from 'uuid/v4';
 import { Uri } from 'vscode';
 import { IFileSystem, TemporaryDirectory } from '../../common/platform/types';
 import { sleep } from '../../common/utils/async';
-import { INotebookStorage } from '../types';
 
 @injectable()
 export class ExportUtil {
-    constructor(
-        @inject(IFileSystem) private fs: IFileSystem,
-        @inject(INotebookStorage) private notebookStorage: INotebookStorage
-    ) {}
+    constructor(@inject(IFileSystem) private fs: IFileSystem) {}
 
     public async generateTempDir(): Promise<TemporaryDirectory> {
         const resultDir = path.join(os.tmpdir(), uuid());
@@ -48,23 +44,22 @@ export class ExportUtil {
     }
 
     public async removeSvgs(source: Uri) {
-        const model = await this.notebookStorage.getOrCreateModel({ file: source });
-        const content = JSON.parse(model.getContent()) as nbformat.INotebookContent;
+        const model = await this.fs.readLocalFile(source.fsPath);
+        const content = JSON.parse(model) as nbformat.INotebookContent;
         for (const cell of content.cells) {
-            const outputs = cell.outputs as nbformat.IOutput[];
-            if (Array.isArray(outputs)) {
+            const outputs = 'outputs' in cell ? (cell.outputs as nbformat.IOutput[]) : undefined;
+            if (outputs && Array.isArray(outputs)) {
                 this.removeSvgFromOutputs(outputs);
             }
         }
-        await this.fs.writeFile(source, JSON.stringify(content, undefined, model.indentAmount));
-        model.dispose(); // We're modifying the JSON in file manually, hence blow away cached model.
+        await this.fs.writeFile(source, JSON.stringify(content, undefined, 4));
     }
 
     private removeSvgFromOutputs(outputs: nbformat.IOutput[]) {
         const SVG = 'image/svg+xml';
         const PNG = 'image/png';
         for (const output of outputs as nbformat.IOutput[]) {
-            if (output.data as nbformat.IMimeBundle) {
+            if ('data' in output) {
                 const data = output.data as nbformat.IMimeBundle;
                 // only remove the svg if there is a png available
                 if (!(SVG in data)) {

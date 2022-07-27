@@ -5,21 +5,21 @@
 
 import type { KernelMessage, Session } from '@jupyterlab/services';
 import type { Observable } from 'rxjs/Observable';
-import type {
-    CancellationToken,
-    Event,
-    NotebookCell,
-    NotebookController,
-    NotebookDocument,
-    QuickPickItem,
-    Uri
-} from 'vscode';
-import type { ServerStatus } from '../../../../datascience-ui/interactive-common/mainState';
+import type { Event, NotebookCell, NotebookController, NotebookDocument, QuickPickItem } from 'vscode';
 import type { IAsyncDisposable, Resource } from '../../../common/types';
 import type { PythonEnvironment } from '../../../pythonEnvironments/info';
-import type { IJupyterKernel, IJupyterKernelSpec, InterruptResult, KernelSocketInformation } from '../../types';
+import type {
+    IJupyterKernel,
+    IJupyterKernelSpec,
+    IJupyterSession,
+    INotebookProviderConnection,
+    InterruptResult,
+    KernelSocketInformation
+} from '../../types';
+import type * as nbformat from '@jupyterlab/nbformat';
 
-export type LiveKernelModel = IJupyterKernel & Partial<IJupyterKernelSpec> & { session: Session.IModel };
+export type LiveKernelModel = IJupyterKernel &
+    Partial<IJupyterKernelSpec> & { model: Session.IModel | undefined; notebook?: { path?: string } };
 
 export enum NotebookCellRunState {
     Running = 1,
@@ -58,24 +58,6 @@ export type KernelSpecConnectionMetadata = Readonly<{
     id: string;
 }>;
 /**
- * Connection metadata for Kernels started using default kernel.
- * Here we tell Jupyter to start a session and let it decide what kernel is to be started.
- * (could apply to either local or remote sessions when dealing with Jupyter Servers).
- */
-export type DefaultKernelConnectionMetadata = Readonly<{
-    /**
-     * This will be empty as we do not have a kernel spec.
-     * Left for type compatibility with other types that have kernel spec property.
-     */
-    kernelSpec?: IJupyterKernelSpec;
-    /**
-     * Python interpreter will be used for intellisense & the like.
-     */
-    interpreter?: PythonEnvironment;
-    kind: 'startUsingDefaultKernel';
-    id: string;
-}>;
-/**
  * Connection metadata for Kernels started using Python interpreter.
  * These are not necessarily raw (it could be plain old Jupyter Kernels, where we register Python interpreter as a kernel).
  * We can have KernelSpec information here as well, however that is totally optional.
@@ -95,56 +77,77 @@ export type PythonKernelConnectionMetadata = Readonly<{
 export type KernelConnectionMetadata =
     | Readonly<LiveKernelConnectionMetadata>
     | Readonly<KernelSpecConnectionMetadata>
-    | Readonly<PythonKernelConnectionMetadata>
-    | Readonly<DefaultKernelConnectionMetadata>;
+    | Readonly<PythonKernelConnectionMetadata>;
 
 /**
  * Connection metadata for local kernels. Makes it easier to not have to check for the live connection type.
  */
 export type LocalKernelConnectionMetadata =
     | Readonly<KernelSpecConnectionMetadata>
-    | Readonly<PythonKernelConnectionMetadata>
-    | Readonly<DefaultKernelConnectionMetadata>;
+    | Readonly<PythonKernelConnectionMetadata>;
 
 export interface IKernelSpecQuickPickItem<T extends KernelConnectionMetadata = KernelConnectionMetadata>
     extends QuickPickItem {
     selection: T;
 }
-export interface IKernelSelectionListProvider<T extends KernelConnectionMetadata = KernelConnectionMetadata> {
-    getKernelSelections(resource: Resource, cancelToken?: CancellationToken): Promise<IKernelSpecQuickPickItem<T>[]>;
-}
 
 export interface IKernel extends IAsyncDisposable {
-    readonly uri: Uri;
+    readonly connection: INotebookProviderConnection | undefined;
+    readonly notebookDocument: NotebookDocument;
+    /**;
+     * In the case of Notebooks, this is the same as the Notebook Uri.
+     * But in the case of Interactive Window, this is the Uri of the file (such as the Python file).
+     * However if we create an intearctive window without a file, then this is undefined.
+     */
+    readonly resourceUri: Resource;
     readonly kernelConnectionMetadata: Readonly<KernelConnectionMetadata>;
-    readonly onStatusChanged: Event<ServerStatus>;
+    readonly onStatusChanged: Event<KernelMessage.Status>;
     readonly onDisposed: Event<void>;
+    readonly onStarted: Event<void>;
     readonly onRestarted: Event<void>;
-    readonly status: ServerStatus;
+    readonly onWillRestart: Event<void>;
+    readonly onWillInterrupt: Event<void>;
+    readonly onPreExecute: Event<NotebookCell>;
+    readonly status: KernelMessage.Status;
     readonly disposed: boolean;
+    readonly disposing: boolean;
     /**
      * Kernel information, used to save in ipynb in the metadata.
      * Crucial for non-python notebooks, else we save the incorrect information.
      */
     readonly info?: KernelMessage.IInfoReplyMsg['content'];
     readonly kernelSocket: Observable<KernelSocketInformation | undefined>;
-    start(options?: { disableUI?: boolean; document: NotebookDocument }): Promise<void>;
-    interrupt(document: NotebookDocument): Promise<InterruptResult>;
+    readonly session?: IJupyterSession;
+    start(options?: { disableUI?: boolean }): Promise<void>;
+    interrupt(): Promise<InterruptResult>;
     restart(): Promise<void>;
-    executeCell(cell: NotebookCell): Promise<void>;
-    executeAllCells(document: NotebookDocument): Promise<void>;
+    executeCell(cell: NotebookCell): Promise<NotebookCellRunState>;
+    executeHidden(code: string): Promise<nbformat.IOutput[]>;
 }
 
-export type KernelOptions = { metadata: KernelConnectionMetadata; controller: NotebookController };
+export type KernelOptions = {
+    metadata: KernelConnectionMetadata;
+    controller: NotebookController;
+    /**
+     * When creating a kernel for an Interactive window, pass the Uri of the Python file here (to set the working directory, file & the like)
+     * In the case of Notebooks, just pass the uri of the notebook.
+     */
+    resourceUri: Resource;
+};
 export const IKernelProvider = Symbol('IKernelProvider');
 export interface IKernelProvider extends IAsyncDisposable {
+    readonly kernels: Readonly<IKernel[]>;
+    onDidStartKernel: Event<IKernel>;
+    onDidRestartKernel: Event<IKernel>;
+    onDidDisposeKernel: Event<IKernel>;
+    onKernelStatusChanged: Event<{ status: KernelMessage.Status; kernel: IKernel }>;
     /**
-     * Get hold of the active kernel for a given Uri (Notebook or other file).
+     * Get hold of the active kernel for a given Notebook.
      */
-    get(uri: Uri): IKernel | undefined;
+    get(notebook: NotebookDocument): IKernel | undefined;
     /**
-     * Gets or creates a kernel for a given Uri.
-     * WARNING: If called with different options for same Uri, old kernel associated with the Uri will be disposed.
+     * Gets or creates a kernel for a given Notebook.
+     * WARNING: If called with different options for same Notebook, old kernel associated with the Uri will be disposed.
      */
-    getOrCreate(uri: Uri, options: KernelOptions): IKernel | undefined;
+    getOrCreate(notebook: NotebookDocument, options: KernelOptions): IKernel;
 }

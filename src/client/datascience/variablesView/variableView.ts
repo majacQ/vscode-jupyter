@@ -10,6 +10,7 @@ import { WebviewView as vscodeWebviewView } from 'vscode';
 import {
     IApplicationShell,
     ICommandManager,
+    IDocumentManager,
     IWebviewViewProvider,
     IWorkspaceService
 } from '../../common/application/types';
@@ -23,14 +24,14 @@ import {
 } from '../../datascience/interactive-common/interactiveWindowTypes';
 import { captureTelemetry, sendTelemetryEvent } from '../../telemetry';
 import { Telemetry } from '../constants';
-import { IDataViewerFactory } from '../data-viewing/types';
+import { IDataViewer, IDataViewerFactory } from '../data-viewing/types';
 import { DataViewerChecker } from '../interactive-common/dataViewerChecker';
 import {
     ICodeCssGenerator,
     IJupyterVariableDataProviderFactory,
     IJupyterVariables,
     IJupyterVariablesRequest,
-    INotebook,
+    IJupyterVariablesResponse,
     IThemeFinder
 } from '../types';
 import { WebviewViewHost } from '../webviews/webviewViewHost';
@@ -61,7 +62,8 @@ export class VariableView extends WebviewViewHost<IVariableViewPanelMapping> imp
         @unmanaged() private readonly jupyterVariableDataProviderFactory: IJupyterVariableDataProviderFactory,
         @unmanaged() private readonly dataViewerFactory: IDataViewerFactory,
         @unmanaged() private readonly notebookWatcher: INotebookWatcher,
-        @unmanaged() private readonly commandManager: ICommandManager
+        @unmanaged() private readonly commandManager: ICommandManager,
+        @unmanaged() private readonly documentManager: IDocumentManager
     ) {
         super(
             configuration,
@@ -71,13 +73,15 @@ export class VariableView extends WebviewViewHost<IVariableViewPanelMapping> imp
             (c, d) => new VariableViewMessageListener(c, d),
             provider,
             variableViewDir,
-            [path.join(variableViewDir, 'commons.initial.bundle.js'), path.join(variableViewDir, 'variableView.js')]
+            [path.join(variableViewDir, 'variableView.js')]
         );
 
         // Sign up if the active variable view notebook is changed, restarted or updated
         this.notebookWatcher.onDidExecuteActiveNotebook(this.activeNotebookExecuted, this, this.disposables);
         this.notebookWatcher.onDidChangeActiveNotebook(this.activeNotebookChanged, this, this.disposables);
         this.notebookWatcher.onDidRestartActiveNotebook(this.activeNotebookRestarted, this, this.disposables);
+        this.variables.refreshRequired(this.sendRefreshMessage, this, this.disposables);
+        this.documentManager.onDidChangeActiveTextEditor(this.activeTextEditorChanged, this, this.disposables);
 
         this.dataViewerChecker = new DataViewerChecker(configuration, appShell);
     }
@@ -155,20 +159,20 @@ export class VariableView extends WebviewViewHost<IVariableViewPanelMapping> imp
         }
     }
 
-    // Handle a request from the react UI to show our data viewer
-    private async showDataViewer(request: IShowDataViewer): Promise<void> {
+    // Handle a request from the react UI to show our data viewer. Public for testing
+    public async showDataViewer(request: IShowDataViewer): Promise<IDataViewer | undefined> {
         try {
             if (
-                this.notebookWatcher.activeNotebook &&
+                this.notebookWatcher.activeKernel &&
                 (await this.dataViewerChecker.isRequestedColumnSizeAllowed(request.columnSize, this.owningResource))
             ) {
                 // Create a variable data provider and pass it to the data viewer factory to create the data viewer
                 const jupyterVariableDataProvider = await this.jupyterVariableDataProviderFactory.create(
                     request.variable,
-                    this.notebookWatcher.activeNotebook
+                    this.notebookWatcher.activeKernel
                 );
                 const title: string = `${localize.DataScience.dataExplorerTitle()} - ${request.variable.name}`;
-                await this.dataViewerFactory.create(jupyterVariableDataProvider, title);
+                return await this.dataViewerFactory.create(jupyterVariableDataProvider, title);
             }
         } catch (e) {
             traceError(e);
@@ -180,13 +184,25 @@ export class VariableView extends WebviewViewHost<IVariableViewPanelMapping> imp
     // Variables for the current active editor are being requested, check that we have a valid active notebook
     // and use the variables interface to fetch them and pass them to the variable view UI
     private async requestVariables(args: IJupyterVariablesRequest): Promise<void> {
-        if (this.notebookWatcher.activeNotebook) {
-            const response = await this.variables.getVariables(args, this.notebookWatcher.activeNotebook);
+        const activeNotebook = this.notebookWatcher.activeKernel;
+        if (activeNotebook) {
+            const response = await this.variables.getVariables(args, activeNotebook);
 
             this.postMessage(InteractiveWindowMessages.GetVariablesResponse, response).ignoreErrors();
             sendTelemetryEvent(Telemetry.VariableExplorerVariableCount, undefined, {
                 variableCount: response.totalCount
             });
+        } else {
+            // If there isn't an active notebook or interactive window, clear the variables
+            const response: IJupyterVariablesResponse = {
+                executionCount: args.executionCount,
+                pageStartIndex: -1,
+                pageResponse: [],
+                totalCount: 0,
+                refreshCount: args.refreshCount
+            };
+
+            this.postMessage(InteractiveWindowMessages.GetVariablesResponse, response).ignoreErrors();
         }
     }
 
@@ -198,7 +214,7 @@ export class VariableView extends WebviewViewHost<IVariableViewPanelMapping> imp
     }
 
     // The active variable new notebook has changed, so force a refresh on the view to pick up the new info
-    private async activeNotebookChanged(arg: { notebook?: INotebook; executionCount?: number }) {
+    private async activeNotebookChanged(arg: { executionCount?: number }) {
         if (arg.executionCount) {
             this.postMessage(InteractiveWindowMessages.UpdateVariableViewExecutionCount, {
                 executionCount: arg.executionCount
@@ -212,7 +228,16 @@ export class VariableView extends WebviewViewHost<IVariableViewPanelMapping> imp
         this.postMessage(InteractiveWindowMessages.ForceVariableRefresh).ignoreErrors();
     }
 
+    // Active text editor changed. Editor may not be associated with a notebook
+    private activeTextEditorChanged() {
+        this.postMessage(InteractiveWindowMessages.ForceVariableRefresh).ignoreErrors();
+    }
+
     private async activeNotebookRestarted() {
         this.postMessage(InteractiveWindowMessages.RestartKernel).ignoreErrors();
+    }
+
+    private async sendRefreshMessage() {
+        this.postMessage(InteractiveWindowMessages.ForceVariableRefresh).ignoreErrors();
     }
 }

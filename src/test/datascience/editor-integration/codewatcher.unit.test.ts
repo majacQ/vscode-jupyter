@@ -5,7 +5,17 @@
 // Disable whitespace / multiline as we use that to pass in our fake file strings
 import { expect } from 'chai';
 import * as TypeMoq from 'typemoq';
-import { CancellationTokenSource, CodeLens, Disposable, EventEmitter, Range, Selection, TextEditor, Uri } from 'vscode';
+import {
+    CancellationTokenSource,
+    CodeLens,
+    Disposable,
+    EventEmitter,
+    NotebookCellExecutionStateChangeEvent,
+    Range,
+    Selection,
+    TextEditor,
+    Uri
+} from 'vscode';
 
 import { instance, mock, when } from 'ts-mockito';
 import {
@@ -21,14 +31,12 @@ import { Commands, EditorContexts } from '../../../client/datascience/constants'
 import { CodeLensFactory } from '../../../client/datascience/editor-integration/codeLensFactory';
 import { DataScienceCodeLensProvider } from '../../../client/datascience/editor-integration/codelensprovider';
 import { CodeWatcher } from '../../../client/datascience/editor-integration/codewatcher';
-import { NotebookProvider } from '../../../client/datascience/interactive-common/notebookProvider';
 import {
     ICodeWatcher,
     IDataScienceErrorHandler,
     IDebugLocationTracker,
     IInteractiveWindow,
-    IInteractiveWindowProvider,
-    INotebook
+    IInteractiveWindowProvider
 } from '../../../client/datascience/types';
 import { IServiceContainer } from '../../../client/ioc/types';
 import { ICodeExecutionHelper } from '../../../client/terminals/types';
@@ -36,6 +44,9 @@ import { MockDocumentManager } from '../mockDocumentManager';
 import { MockJupyterSettings } from '../mockJupyterSettings';
 import { MockEditor } from '../mockTextEditor';
 import { createDocument } from './helpers';
+import { disposeAllDisposables } from '../../../client/common/helpers';
+import { CellHashProviderFactory } from '../../../client/datascience/editor-integration/cellHashProviderFactory';
+import { IKernel, IKernelProvider } from '../../../client/datascience/jupyter/kernels/types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -75,7 +86,6 @@ suite('DataScience Code Watcher Unit Tests', () => {
     let tokenSource: CancellationTokenSource;
     let debugService: TypeMoq.IMock<IDebugService>;
     let debugLocationTracker: TypeMoq.IMock<IDebugLocationTracker>;
-    let vscodeNotebook: TypeMoq.IMock<IVSCodeNotebook>;
     const contexts: Map<string, boolean> = new Map<string, boolean>();
     const jupyterSettings = new MockJupyterSettings(undefined);
     const disposables: Disposable[] = [];
@@ -92,7 +102,6 @@ suite('DataScience Code Watcher Unit Tests', () => {
         helper = TypeMoq.Mock.ofType<ICodeExecutionHelper>();
         commandManager = TypeMoq.Mock.ofType<ICommandManager>();
         debugService = TypeMoq.Mock.ofType<IDebugService>();
-        vscodeNotebook = TypeMoq.Mock.ofType<IVSCodeNotebook>();
 
         // Setup default settings
         jupyterSettings.assign({
@@ -116,7 +125,7 @@ suite('DataScience Code Watcher Unit Tests', () => {
             codeRegularExpression: '^(#\\s*%%|#\\s*\\<codecell\\>|#\\s*In\\[\\d*?\\]|#\\s*In\\[ \\])',
             markdownRegularExpression: '^(#\\s*%%\\s*\\[markdown\\]|#\\s*\\<markdowncell\\>)',
             enableCellCodeLens: true,
-            enablePlotViewer: true,
+            generateSVGPlots: false,
             runStartupCommands: '',
             debugJustMyCode: true,
             variableQueries: [],
@@ -125,7 +134,6 @@ suite('DataScience Code Watcher Unit Tests', () => {
             interactiveWindowMode: 'single'
         });
         debugService.setup((d) => d.activeDebugSession).returns(() => undefined);
-        vscodeNotebook.setup((d) => d.activeNotebookEditor).returns(() => undefined);
 
         // Setup the service container to return code watchers
         serviceContainer = TypeMoq.Mock.ofType<IServiceContainer>();
@@ -136,19 +144,29 @@ suite('DataScience Code Watcher Unit Tests', () => {
         // Setup config service
         configService.setup((c) => c.getSettings(TypeMoq.It.isAny())).returns(() => jupyterSettings);
 
-        const dummyEvent = new EventEmitter<{ identity: Uri; notebook: INotebook }>();
-        const notebookProvider = mock(NotebookProvider);
-        when((notebookProvider as any).then).thenReturn(undefined);
-        when(notebookProvider.onNotebookCreated).thenReturn(dummyEvent.event);
         const workspace = mock<IWorkspaceService>();
         when(workspace.isTrusted).thenReturn(true);
-        when(workspace.onDidGrantWorkspaceTrust).thenReturn(new EventEmitter<void>().event);
+        const trustedEvent = new EventEmitter<void>();
+        when(workspace.onDidGrantWorkspaceTrust).thenReturn(trustedEvent.event);
+        const notebook = mock<IVSCodeNotebook>();
+        const execStateChangeEvent = new EventEmitter<NotebookCellExecutionStateChangeEvent>();
+        when(notebook.onDidChangeNotebookCellExecutionState).thenReturn(execStateChangeEvent.event);
+        const hashProviderFactory = mock<CellHashProviderFactory>();
+        const kernelProvider = mock<IKernelProvider>();
+        const kernelDisposedEvent = new EventEmitter<IKernel>();
+        when(kernelProvider.onDidDisposeKernel).thenReturn(kernelDisposedEvent.event);
+        disposables.push(trustedEvent);
+        disposables.push(execStateChangeEvent);
+        disposables.push(kernelDisposedEvent);
         const codeLensFactory = new CodeLensFactory(
             configService.object,
-            instance(notebookProvider),
             fileSystem.object,
             documentManager.object,
-            instance(workspace)
+            instance(workspace),
+            instance(notebook),
+            disposables,
+            instance(hashProviderFactory),
+            instance(kernelProvider)
         );
         serviceContainer
             .setup((c) => c.get(TypeMoq.It.isValue(ICodeWatcher)))
@@ -195,7 +213,7 @@ suite('DataScience Code Watcher Unit Tests', () => {
             codeLensFactory
         );
     });
-
+    teardown(() => disposeAllDisposables(disposables));
     function createTypeMoq<T>(tag: string): TypeMoq.IMock<T> {
         // Use typemoqs for those things that are resolved as promises. mockito doesn't allow nesting of mocks. ES6 Proxy class
         // is the problem. We still need to make it thenable though. See this issue: https://github.com/florinn/typemoq/issues/67
@@ -976,7 +994,6 @@ testing2`;
             disposables,
             debugService.object,
             fileSystem.object,
-            vscodeNotebook.object,
             instance(workspace)
         );
 

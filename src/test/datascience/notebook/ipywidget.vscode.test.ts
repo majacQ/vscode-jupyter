@@ -22,7 +22,7 @@ import {
     waitForExecutionCompletedSuccessfully,
     waitForKernelToGetAutoSelected
 } from './helper';
-import { EXTENSION_ROOT_DIR_FOR_TESTS, IS_WEBVIEW_BUILD_SKIPPED } from '../../constants';
+import { EXTENSION_ROOT_DIR_FOR_TESTS } from '../../constants';
 import { createDeferred, Deferred } from '../../../client/common/utils/async';
 import { InteractiveWindowMessages } from '../../../client/datascience/interactive-common/interactiveWindowTypes';
 import { NotebookIPyWidgetCoordinator } from '../../../client/datascience/ipywidgets/notebookIPyWidgetCoordinator';
@@ -45,12 +45,6 @@ suite('DataScience - VSCode Notebook - IPyWidget test', () => {
     let widgetCoordinator: NotebookIPyWidgetCoordinator;
     let testWidgetNb: Uri;
     suiteSetup(async function () {
-        // We need to have webviews built to run this, so skip if we don't have them
-        if (IS_WEBVIEW_BUILD_SKIPPED) {
-            console.log('Widget notebook tests require webview build to be enabled');
-            return this.skip();
-        }
-
         if (!process.env.VSC_JUPYTER_RUN_NB_TEST || !(await canRunNotebookTests())) {
             return this.skip();
         }
@@ -71,7 +65,7 @@ suite('DataScience - VSCode Notebook - IPyWidget test', () => {
     });
     suiteTeardown(() => closeNotebooksAndCleanUpAfterTests(disposables));
     test('Can run a widget notebook (webview-test)', async function () {
-        await openNotebook(api.serviceContainer, testWidgetNb.fsPath);
+        await openNotebook(testWidgetNb.fsPath);
         await waitForKernelToGetAutoSelected();
         const cell = vscodeNotebook.activeNotebookEditor?.document.cellAt(0)!;
 
@@ -88,7 +82,7 @@ suite('DataScience - VSCode Notebook - IPyWidget test', () => {
         assert.ok(flag.completed, 'Widget did not load successfully during execution');
     });
     test('Can run a widget notebook twice (webview-test)', async function () {
-        await openNotebook(api.serviceContainer, testWidgetNb.fsPath);
+        await openNotebook(testWidgetNb.fsPath);
         await waitForKernelToGetAutoSelected();
         let cell = vscodeNotebook.activeNotebookEditor?.document.cellAt(0)!;
         // Execute cell. It should load and render the widget
@@ -100,7 +94,7 @@ suite('DataScience - VSCode Notebook - IPyWidget test', () => {
         // Close notebook and open again
         await closeNotebooks();
 
-        await openNotebook(api.serviceContainer, testWidgetNb.fsPath);
+        await openNotebook(testWidgetNb.fsPath);
         await waitForKernelToGetAutoSelected();
         cell = vscodeNotebook.activeNotebookEditor?.document.cellAt(0)!;
 
@@ -119,7 +113,7 @@ suite('DataScience - VSCode Notebook - IPyWidget test', () => {
     test('Can run widget cells that need requireJS (webview-test)', async function () {
         // Test runs locally but fails on CI, disabling to be fixed in 5265
         this.skip();
-        await openNotebook(api.serviceContainer, testWidgetNb.fsPath);
+        await openNotebook(testWidgetNb.fsPath);
         await waitForKernelToGetAutoSelected();
         // 6th cell has code that needs requireJS
         const cell = vscodeNotebook.activeNotebookEditor?.document.getCells()![6]!;

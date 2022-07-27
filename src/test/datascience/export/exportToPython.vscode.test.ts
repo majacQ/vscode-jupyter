@@ -8,7 +8,7 @@ import { CancellationTokenSource, Uri } from 'vscode';
 import { IDocumentManager } from '../../../client/common/application/types';
 import { IFileSystem } from '../../../client/common/platform/types';
 import { ExportInterpreterFinder } from '../../../client/datascience/export/exportInterpreterFinder';
-import { ExportFormat, IExport } from '../../../client/datascience/export/types';
+import { ExportFormat, INbConvertExport } from '../../../client/datascience/export/types';
 import { IExtensionTestApi } from '../../common';
 import { EXTENSION_ROOT_DIR_FOR_TESTS } from '../../constants';
 import { closeActiveWindows, initialize } from '../../initialize';
@@ -27,18 +27,16 @@ suite('DataScience - Export Python', function () {
             // eslint-disable-next-line no-invalid-this
             this.skip();
         }
-        // eslint-disable-next-line no-invalid-this
-        this.skip();
     });
     teardown(closeActiveWindows);
     suiteTeardown(closeActiveWindows);
     test('Export To Python', async () => {
         const fileSystem = api.serviceContainer.get<IFileSystem>(IFileSystem);
-        const exportToPython = api.serviceContainer.get<IExport>(IExport, ExportFormat.python);
+        const exportToPython = api.serviceContainer.get<INbConvertExport>(INbConvertExport, ExportFormat.python);
         const target = Uri.file((await fileSystem.createTemporaryLocalFile('.py')).filePath);
         const token = new CancellationTokenSource();
         const exportInterpreterFinder = api.serviceContainer.get<ExportInterpreterFinder>(ExportInterpreterFinder);
-        const interpreter = await exportInterpreterFinder.getExportInterpreter(ExportFormat.html);
+        const interpreter = await exportInterpreterFinder.getExportInterpreter();
         await exportToPython.export(
             Uri.file(path.join(EXTENSION_ROOT_DIR_FOR_TESTS, 'src', 'test', 'datascience', 'export', 'test.ipynb')),
             target,
@@ -47,6 +45,7 @@ suite('DataScience - Export Python', function () {
         );
 
         const documentManager = api.serviceContainer.get<IDocumentManager>(IDocumentManager);
-        assert.include(documentManager.activeTextEditor!.document.getText(), 'tim = 1');
+        const document = await documentManager.openTextDocument(target);
+        assert.include(document.getText(), 'tim = 1');
     });
 });
