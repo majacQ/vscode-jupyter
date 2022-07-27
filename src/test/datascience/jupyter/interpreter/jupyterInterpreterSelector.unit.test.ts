@@ -5,14 +5,14 @@
 
 import { assert } from 'chai';
 import { anything, capture, instance, mock, verify, when } from 'ts-mockito';
-import { ApplicationShell } from '../../../../client/common/application/applicationShell';
-import { IApplicationShell, IWorkspaceService } from '../../../../client/common/application/types';
-import { WorkspaceService } from '../../../../client/common/application/workspace';
-import { PathUtils } from '../../../../client/common/platform/pathUtils';
-import { IPathUtils } from '../../../../client/common/types';
-import { JupyterInterpreterSelector } from '../../../../client/datascience/jupyter/interpreter/jupyterInterpreterSelector';
-import { JupyterInterpreterStateStore } from '../../../../client/datascience/jupyter/interpreter/jupyterInterpreterStateStore';
-import { IInterpreterSelector } from '../../../../client/interpreter/configuration/types';
+import { ApplicationShell } from '../../../../platform/common/application/applicationShell';
+import { IApplicationShell, IWorkspaceService } from '../../../../platform/common/application/types';
+import { WorkspaceService } from '../../../../platform/common/application/workspace.node';
+import { IInterpreterSelector } from '../../../../platform/interpreter/configuration/types';
+import { JupyterInterpreterSelector } from '../../../../kernels/jupyter/interpreter/jupyterInterpreterSelector.node';
+import { JupyterInterpreterStateStore } from '../../../../kernels/jupyter/interpreter/jupyterInterpreterStateStore.node';
+import { Uri } from 'vscode';
+import { getDisplayPath } from '../../../../platform/common/platform/fs-paths';
 
 suite('DataScience - Jupyter Interpreter Picker', () => {
     let picker: JupyterInterpreterSelector;
@@ -20,21 +20,19 @@ suite('DataScience - Jupyter Interpreter Picker', () => {
     let appShell: IApplicationShell;
     let interpreterSelectionState: JupyterInterpreterStateStore;
     let workspace: IWorkspaceService;
-    let pathUtils: IPathUtils;
 
     setup(() => {
         interpreterSelector = mock<IInterpreterSelector>();
         interpreterSelectionState = mock(JupyterInterpreterStateStore);
         appShell = mock(ApplicationShell);
         workspace = mock(WorkspaceService);
-        pathUtils = mock(PathUtils);
+        when(workspace.workspaceFolders).thenReturn([]);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         picker = new JupyterInterpreterSelector(
             instance(interpreterSelector),
             instance(appShell),
             instance(interpreterSelectionState),
-            instance(workspace),
-            instance(pathUtils)
+            instance(workspace)
         );
     });
 
@@ -65,9 +63,9 @@ suite('DataScience - Jupyter Interpreter Picker', () => {
     test('Should display current interpreter path in the picker', async () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const interpreters = ['something'] as any[];
-        const displayPath = 'Display Path';
-        when(interpreterSelectionState.selectedPythonPath).thenReturn('jupyter.exe');
-        when(pathUtils.getDisplayName('jupyter.exe', anything())).thenReturn(displayPath);
+        const selectedPythonPath = Uri.file('jupyter.exe');
+        const displayPath = getDisplayPath(selectedPythonPath);
+        when(interpreterSelectionState.selectedPythonPath).thenReturn(selectedPythonPath);
         when(interpreterSelector.getSuggestions(undefined)).thenResolve(interpreters);
         when(appShell.showQuickPick(anything(), anything())).thenResolve();
 

@@ -1,9 +1,10 @@
 import * as crypto from 'crypto';
-import * as path from 'path';
-import { getInterpreterHash } from '../client/pythonEnvironments/info/interpreter';
+import * as path from '../platform/vscode-path/path';
+import { getInterpreterHash } from '../platform/pythonEnvironments/info/interpreter';
+import { Uri } from 'vscode';
 
 function doHash(p: string) {
-    return getInterpreterHash({ path: p });
+    return getInterpreterHash({ uri: Uri.file(p) });
 }
 
 function trivial(p: string) {

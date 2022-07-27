@@ -25,8 +25,6 @@ export namespace vscMockExtHostedTypes {
             public readonly runStartTime?: number,
             public readonly statusMessage?: string,
             public readonly lastRunDuration?: number,
-            public readonly inputCollapsed?: boolean,
-            public readonly outputCollapsed?: boolean,
             public readonly custom?: Record<string, any>
         ) {}
 
@@ -40,8 +38,6 @@ export namespace vscMockExtHostedTypes {
             runStartTime?: number | null;
             statusMessage?: string | null;
             lastRunDuration?: number | null;
-            inputCollapsed?: boolean | null;
-            outputCollapsed?: boolean | null;
             custom?: Record<string, any> | null;
         }): NotebookCellMetadata {
             return new NotebookCellMetadata(
@@ -53,8 +49,6 @@ export namespace vscMockExtHostedTypes {
                 change.runStartTime || this.runStartTime,
                 change.statusMessage || this.statusMessage,
                 change.lastRunDuration || this.lastRunDuration,
-                change.inputCollapsed || this.inputCollapsed,
-                change.outputCollapsed || this.outputCollapsed,
                 change.custom || this.custom
             );
         }
@@ -69,6 +63,22 @@ export namespace vscMockExtHostedTypes {
         Idle = 2,
         Success = 3,
         Error = 4
+    }
+
+    /**
+     * Notebook controller affinity for notebook documents.
+     *
+     * @see {@link NotebookController.updateNotebookAffinity}
+     */
+    export enum NotebookControllerAffinity {
+        /**
+         * Default affinity.
+         */
+        Default = 1,
+        /**
+         * A controller is preferred for a notebook.
+         */
+        Preferred = 2
     }
 
     export enum NotebookRunState {
@@ -491,7 +501,7 @@ export namespace vscMockExtHostedTypes {
             return this._anchor === this._end;
         }
 
-        toJSON() {
+        override toJSON() {
             return {
                 start: this.start,
                 end: this.end,
@@ -2026,7 +2036,7 @@ export namespace vscMockExtHostedTypes {
 
         readonly id: string;
 
-        private constructor(id: string) {
+        public constructor(id: string) {
             this.id = id;
         }
     }
@@ -2048,20 +2058,31 @@ export namespace vscMockExtHostedTypes {
 
     export class RelativePattern implements IRelativePattern {
         base: string;
+        baseUri: vscUri.URI;
         pattern: string;
 
-        constructor(base: vscode.WorkspaceFolder | string, pattern: string) {
-            if (typeof base !== 'string') {
-                if (!base || !vscUri.URI.isUri(base.uri)) {
+        constructor(base: vscode.WorkspaceFolder | vscUri.URI | string, pattern: string) {
+            if (typeof base === 'string') {
+                // String
+                this.baseUri = vscUri.URI.from({ scheme: 'file', path: base });
+                this.base = base;
+            } else if (vscUri.URI.isUri(base)) {
+                // vscode.Uri
+                this.baseUri = base;
+                this.base = base.fsPath;
+            } else {
+                // vscode.WorkspaceFolder
+                if (!base || !('uri' in base)) {
                     throw illegalArgument('base');
                 }
+                this.baseUri = base.uri;
+                this.base = base.uri.fsPath;
             }
 
             if (typeof pattern !== 'string') {
                 throw illegalArgument('pattern');
             }
 
-            this.base = typeof base === 'string' ? base : base.uri.fsPath;
             this.pattern = pattern;
         }
 
@@ -2069,7 +2090,6 @@ export namespace vscMockExtHostedTypes {
             return relative(from, to);
         }
     }
-
     export class Breakpoint {
         readonly enabled: boolean;
         readonly condition?: string;
@@ -2244,5 +2264,20 @@ export namespace vscMockExtHostedTypes {
 
     export class QuickInputButtons {
         static readonly Back: vscode.QuickInputButton = {} as any;
+    }
+    export class NotebookRendererScript {
+        constructor(public uri: vscode.Uri, public provides: string | string[] = []) {}
+    }
+    export class FileDecoration {
+        badge?: string;
+        tooltip?: string;
+        color?: vscode.ThemeColor;
+        propagate?: boolean;
+
+        constructor(badge?: string, tooltip?: string, color?: ThemeColor) {
+            this.badge = badge;
+            this.tooltip = tooltip;
+            this.color = color;
+        }
     }
 }

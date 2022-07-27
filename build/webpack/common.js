@@ -18,9 +18,6 @@ exports.nodeModulesToExternalize = [
     'unicode/category/Nd',
     'unicode/category/Pc',
     '@jupyterlab/services',
-    'request',
-    'request-progress',
-    'diff-match-patch',
     'node-stream-zip',
     'pdfkit/js/pdfkit.standalone',
     'crypto-js',
@@ -32,7 +29,7 @@ exports.nodeModulesToReplacePaths = [...exports.nodeModulesToExternalize];
 function getDefaultPlugins(name) {
     const plugins = [];
     // Only run the analyzer on a local machine or if required
-    if (!constants.isCI || process.env.VSC_JUPYTER_FORCE_ANALYZER) {
+    if (process.env.VSC_JUPYTER_FORCE_ANALYZER) {
         plugins.push(
             new webpack_bundle_analyzer.BundleAnalyzerPlugin({
                 analyzerMode: 'static',
@@ -47,7 +44,7 @@ function getDefaultPlugins(name) {
 }
 exports.getDefaultPlugins = getDefaultPlugins;
 function getListOfExistingModulesInOutDir() {
-    const outDir = path.join(constants.ExtensionRootDir, 'out', 'client');
+    const outDir = path.join(constants.ExtensionRootDir, 'out');
     const files = glob.sync('**/*.js', { sync: true, cwd: outDir });
     return files.map((filePath) => `./${filePath.slice(0, -3)}`);
 }

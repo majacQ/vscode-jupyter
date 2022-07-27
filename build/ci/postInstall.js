@@ -7,7 +7,6 @@ const colors = require('colors/safe');
 const fs = require('fs-extra');
 const path = require('path');
 const constants = require('../constants');
-const child_process = require('child_process');
 
 /**
  * In order to get raw kernels working, we reuse the default kernel that jupyterlab ships.
@@ -103,6 +102,51 @@ function makeVariableExplorerAlwaysSorted() {
     }
 }
 
+function fixJupyterLabRenderers() {
+    const warnings = [];
+    ['node_modules/@jupyterlab/cells/lib/widget.js', 'node_modules/@jupyterlab/rendermime/lib/renderers.js'].forEach(
+        (file) => {
+            const filePath = path.join(__dirname, '..', '..', file);
+            if (!fs.existsSync(filePath)) {
+                return;
+            }
+            const textToReplace = `import marked from 'marked'`;
+            const textToReplaceWith = `import { marked } from 'marked'`;
+            const fileContents = fs.readFileSync(filePath, 'utf8').toString();
+            if (fileContents.indexOf(textToReplace) === -1 && fileContents.indexOf(textToReplaceWith) === -1) {
+                warnings.push('Unable to find Jupyter marked usage to replace!');
+            }
+            fs.writeFileSync(filePath, fileContents.replace(textToReplace, `import { marked } from 'marked'`));
+        }
+    );
+    if (warnings.length === 2) {
+        throw new Error(warnings[0] + '\n' + warnings[1]);
+    }
+}
+
+/**
+ * Ensures extension loads in safari (https://github.com/microsoft/vscode-jupyter/issues/10621)
+ * Some of the regexes are not supported in safari and not required either.
+ */
+function fixStripComments() {
+    const file = 'node_modules/strip-comments/lib/languages.js';
+    const filePath = path.join(__dirname, '..', '..', file);
+    if (!fs.existsSync(filePath)) {
+        return;
+    }
+    const contents = `
+'use strict';
+
+exports.javascript = {
+    BLOCK_OPEN_REGEX: /^\\/\\*\\*?(!?)/,
+    BLOCK_CLOSE_REGEX: /^\\*\\/(\\n?)/,
+    LINE_REGEX: /^\\/\\/(!?).*/
+};`;
+    fs.writeFileSync(filePath, contents);
+}
+
+fixJupyterLabRenderers();
 makeVariableExplorerAlwaysSorted();
 createJupyterKernelWithoutSerialization();
 updateJSDomTypeDefinition();
+fixStripComments();

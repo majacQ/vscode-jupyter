@@ -11,15 +11,16 @@ import { EventEmitter } from 'events';
 import { Observable } from 'rxjs/Observable';
 import * as sinon from 'sinon';
 import { anything, instance, mock, reset, verify, when } from 'ts-mockito';
+import { Uri } from 'vscode';
 import { MessageConnection } from 'vscode-jsonrpc';
-import { IPlatformService } from '../../../client/common/platform/types';
-import { ProcessLogger } from '../../../client/common/process/logger';
-import { PythonDaemonExecutionService } from '../../../client/common/process/pythonDaemon';
-import { PythonDaemonExecutionServicePool } from '../../../client/common/process/pythonDaemonPool';
-import { IProcessLogger, IPythonExecutionService, Output } from '../../../client/common/process/types';
-import { ReadWrite } from '../../../client/common/types';
-import { sleep } from '../../../client/common/utils/async';
-import { InterpreterInformation } from '../../../client/pythonEnvironments/info';
+import { IPlatformService } from '../../../platform/common/platform/types';
+import { ProcessLogger } from '../../../platform/common/process/logger.node';
+import { PythonDaemonExecutionService } from '../../../platform/common/process/pythonDaemon.node';
+import { PythonDaemonExecutionServicePool } from '../../../platform/common/process/pythonDaemonPool.node';
+import { IProcessLogger, IPythonExecutionService, Output } from '../../../platform/common/process/types.node';
+import { ReadWrite } from '../../../platform/common/types';
+import { sleep } from '../../../platform/common/utils/async';
+import { InterpreterInformation, PythonEnvironment } from '../../../platform/pythonEnvironments/info';
 import { noop } from '../../core';
 import { asyncDump } from '../asyncDump';
 use(chaiPromised);
@@ -28,7 +29,7 @@ use(chaiPromised);
 suite('Daemon - Python Daemon Pool', () => {
     class DaemonPool extends PythonDaemonExecutionServicePool {
         // eslint-disable-next-line
-        public createConnection(proc: ChildProcess) {
+        public override createConnection(proc: ChildProcess) {
             return super.createConnection(proc);
         }
     }
@@ -62,7 +63,7 @@ suite('Daemon - Python Daemon Pool', () => {
     });
 
     async function setupDaemon(daemonPoolService: DaemonPool) {
-        const mockMessageConnection = ({
+        const mockMessageConnection = {
             sendRequest: sendRequestStub,
             listen: listenStub,
             onClose: noop,
@@ -70,8 +71,8 @@ suite('Daemon - Python Daemon Pool', () => {
             onError: noop,
             onNotification: noop,
             onUnhandledNotification: noop
-        } as any) as MessageConnection;
-        const daemonProc = (new EventEmitter() as any) as ReadWrite<ChildProcess>;
+        } as any as MessageConnection;
+        const daemonProc = new EventEmitter() as any as ReadWrite<ChildProcess>;
         daemonProc.killed = false;
         daemonProc.pid = process.pid;
         daemonProc.kill = noop as any;
@@ -95,7 +96,7 @@ suite('Daemon - Python Daemon Pool', () => {
         const pool = new DaemonPool(
             logger,
             [],
-            { pythonPath: 'py.exe' },
+            { interpreter: { uri: Uri.file('py.exe') } as PythonEnvironment },
             instance(pythonExecService),
             instance(platformService),
             undefined
@@ -111,7 +112,11 @@ suite('Daemon - Python Daemon Pool', () => {
         const pool = new DaemonPool(
             logger,
             [],
-            { daemonCount: 5, observableDaemonCount: 3, pythonPath: 'py.exe' },
+            {
+                daemonCount: 5,
+                observableDaemonCount: 3,
+                interpreter: { uri: Uri.file('py.exe') } as PythonEnvironment
+            },
             instance(pythonExecService),
             instance(platformService),
             undefined
@@ -130,7 +135,11 @@ suite('Daemon - Python Daemon Pool', () => {
         const pool = new DaemonPool(
             logger,
             [],
-            { daemonCount: 5, observableDaemonCount: 3, pythonPath: 'py.exe' },
+            {
+                daemonCount: 5,
+                observableDaemonCount: 3,
+                interpreter: { uri: Uri.file('py.exe') } as PythonEnvironment
+            },
             instance(pythonExecService),
             instance(platformService),
             undefined
@@ -159,7 +168,11 @@ suite('Daemon - Python Daemon Pool', () => {
         const pool = new DaemonPool(
             logger,
             [],
-            { daemonCount: 1, observableDaemonCount: 1, pythonPath: 'py.exe' },
+            {
+                daemonCount: 1,
+                observableDaemonCount: 1,
+                interpreter: { uri: Uri.file('py.exe') } as PythonEnvironment
+            },
             instance(pythonExecService),
             instance(platformService),
             undefined
@@ -211,7 +224,11 @@ suite('Daemon - Python Daemon Pool', () => {
             const pool = new DaemonPool(
                 logger,
                 [],
-                { daemonCount: 2, observableDaemonCount: 1, pythonPath: 'py.exe' },
+                {
+                    daemonCount: 2,
+                    observableDaemonCount: 1,
+                    interpreter: { uri: Uri.file('py.exe') } as PythonEnvironment
+                },
                 instance(pythonExecService),
                 instance(platformService),
                 undefined
@@ -290,7 +307,11 @@ suite('Daemon - Python Daemon Pool', () => {
         const pool = new DaemonPool(
             logger,
             [],
-            { daemonCount: 1, observableDaemonCount: 1, pythonPath: 'py.exe' },
+            {
+                daemonCount: 1,
+                observableDaemonCount: 1,
+                interpreter: { uri: Uri.file('py.exe') } as PythonEnvironment
+            },
             instance(pythonExecService),
             instance(platformService),
             undefined

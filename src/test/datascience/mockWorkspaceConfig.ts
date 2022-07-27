@@ -16,8 +16,8 @@ export class MockWorkspaceConfiguration implements WorkspaceConfiguration {
         }
 
         // Special case python path (not in the object)
-        if (defaultSettings && defaultSettings.pythonPath) {
-            this.values.set('pythonPath', defaultSettings.pythonPath);
+        if (defaultSettings && defaultSettings.defaultInterpreterPath) {
+            this.values.set('defaultInterpreterPath', defaultSettings.defaultInterpreterPath);
         }
     }
 
@@ -32,9 +32,7 @@ export class MockWorkspaceConfiguration implements WorkspaceConfiguration {
     public has(section: string): boolean {
         return this.values.has(section);
     }
-    public inspect<T>(
-        _section: string
-    ):
+    public inspect<T>(_section: string):
         | {
               key: string;
               defaultValue?: T | undefined;

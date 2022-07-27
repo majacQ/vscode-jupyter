@@ -28,25 +28,25 @@ suite('Dummy8', () => {
 //     ICustomEditorService,
 //     IDocumentManager,
 //     IWorkspaceService
-// } from '../../client/common/application/types';
-// import { IFileSystem } from '../../client/common/platform/types';
-// import { ICryptoUtils, IDisposable, IExtensionContext } from '../../client/common/types';
-// import { createDeferred, sleep, waitForPromise } from '../../client/common/utils/async';
-// import { noop } from '../../client/common/utils/misc';
-// import { Commands, Identifiers } from '../../client/datascience/constants';
-// import { InteractiveWindowMessages } from '../../client/datascience/interactive-common/interactiveWindowTypes';
-// import { NativeEditor as NativeEditorWebView } from '../../client/datascience/interactive-ipynb/nativeEditor';
-// import { IKernelSpecQuickPickItem, KernelSpecConnectionMetadata } from '../../client/datascience/jupyter/kernels/types';
-// import { KeyPrefix } from '../../client/datascience/notebookStorage/nativeEditorStorage';
-// import { NativeEditorNotebookModel } from '../../client/datascience/notebookStorage/notebookModel';
-// import { ICell, INotebookEditor, INotebookEditorProvider, INotebookExporter } from '../../client/datascience/types';
-// import { concatMultilineString } from '../../datascience-ui/common';
-// import { ExecutionCount } from '../../datascience-ui/interactive-common/executionCount';
-// import { CommonActionType } from '../../datascience-ui/interactive-common/redux/reducers/types';
-// import { NativeCell } from '../../datascience-ui/native-editor/nativeCell';
-// import { NativeEditor } from '../../datascience-ui/native-editor/nativeEditor';
-// import { IKeyboardEvent } from '../../datascience-ui/react-common/event';
-// import { ImageButton } from '../../datascience-ui/react-common/imageButton';
+// } from '../../platform/common/application/types';
+// import { IFileSystem } from '../../platform/common/platform/types';
+// import { ICryptoUtils, IDisposable, IExtensionContext } from '../../platform/common/types';
+// import { createDeferred, sleep, waitForPromise } from '../../platform/common/utils/async';
+// import { noop } from '../../platform/common/utils/misc';
+// import { Commands, Identifiers } from '../../platform/datascience/constants';
+// import { InteractiveWindowMessages } from '../../platform/datascience/interactive-common/interactiveWindowTypes';
+// import { NativeEditor as NativeEditorWebView } from '../../platform/datascience/interactive-ipynb/nativeEditor';
+// import { IKernelSpecQuickPickItem, KernelSpecConnectionMetadata } from '../../platform/datascience/jupyter/kernels/types';
+// import { KeyPrefix } from '../../platform/datascience/notebookStorage/nativeEditorStorage';
+// import { NativeEditorNotebookModel } from '../../platform/datascience/notebookStorage/notebookModel';
+// import { ICell, INotebookEditor, INotebookEditorProvider, INotebookExporter } from '../../platform/datascience/types';
+// import { concatMultilineString } from '../../webviews/webview-side/common';
+// import { ExecutionCount } from '../../webviews/webview-side/interactive-common/executionCount';
+// import { CommonActionType } from '../../webviews/webview-side/interactive-common/redux/reducers/types';
+// import { NativeCell } from '../../webviews/webview-side/native-editor/nativeCell';
+// import { NativeEditor } from '../../webviews/webview-side/native-editor/nativeEditor';
+// import { IKeyboardEvent } from '../../webviews/webview-side/react-common/event';
+// import { ImageButton } from '../../webviews/webview-side/react-common/imageButton';
 // import { waitForCondition } from '../common';
 // import { createTemporaryFile } from '../utils/fs';
 // import { DataScienceIocContainer } from './dataScienceIocContainer';
@@ -407,7 +407,7 @@ suite('Dummy8', () => {
 //                             env: undefined
 //                         };
 //                         const invalidMetadata: KernelSpecConnectionMetadata = {
-//                             kind: 'startUsingKernelSpec',
+//                             kind: 'startUsingLocalKernelSpec',
 //                             kernelSpec: invalidKernel,
 //                             id: '1'
 //                         };
@@ -429,7 +429,7 @@ suite('Dummy8', () => {
 //                         const editor = (ne.editor as any) as NativeEditorWebView;
 //                         await editor.updateNotebookOptions({
 //                             kernelSpec: invalidKernel,
-//                             kind: 'startUsingKernelSpec',
+//                             kind: 'startUsingLocalKernelSpec',
 //                             id: '1'
 //                         });
 
@@ -477,7 +477,6 @@ suite('Dummy8', () => {
 
 //                 runMountedTest('Remote kernel can be switched and remembered', async function () {
 //                     // Turn off raw kernel for this test as it's testing remote
-//                     ioc.forceDataScienceSettingsChanged({ disableZMQSupport: true, jupyterServerType: 'remote' });
 
 //                     const pythonService = await createPythonService(ioc, 2);
 
@@ -508,15 +507,15 @@ suite('Dummy8', () => {
 //                         async (o: IKernelSpecQuickPickItem[]) => {
 //                             const existing = o.filter(
 //                                 (s) =>
-//                                     s.selection.kind === 'connectToLiveKernel' &&
+//                                     s.selection.kind === 'connectToLiveRemoteKernel' &&
 //                                     s.selection.kernelModel.numberOfConnections
 //                             );
 
 //                             // Might be more than one. Get the oldest one. It has the actual activity.
 //                             const sorted = existing.sort((a, b) => {
 //                                 if (
-//                                     a.selection.kind !== 'connectToLiveKernel' ||
-//                                     b.selection.kind !== 'connectToLiveKernel'
+//                                     a.selection.kind !== 'connectToLiveRemoteKernel' ||
+//                                     b.selection.kind !== 'connectToLiveRemoteKernel'
 //                                 ) {
 //                                     return 0;
 //                                 }

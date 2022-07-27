@@ -31,6 +31,30 @@ export namespace vscMock {
         Workspace = 2
     }
 
+    /**
+     * The ExtensionMode is provided on the `ExtensionContext` and indicates the
+     * mode the specific extension is running in.
+     */
+    export enum ExtensionMode {
+        /**
+         * The extension is installed normally (for example, from the marketplace
+         * or VSIX) in the editor.
+         */
+        Production = 1,
+
+        /**
+         * The extension is running from an `--extensionDevelopmentPath` provided
+         * when launching the editor.
+         */
+        Development = 2,
+
+        /**
+         * The extension is running from an `--extensionTestsPath` and
+         * the extension host is running unit tests.
+         */
+        Test = 3
+    }
+
     export class Disposable {
         constructor(private callOnDispose: Function) {}
         public dispose(): any {
@@ -58,11 +82,11 @@ export namespace vscMock {
         protected add = (listener: (e: T) => any, _thisArgs?: any, _disposables?: Disposable[]): Disposable => {
             const bound = _thisArgs ? listener.bind(_thisArgs) : listener;
             this.emitter.addListener('evt', bound);
-            return ({
+            return {
                 dispose: () => {
                     this.emitter.removeListener('evt', bound);
                 }
-            } as any) as Disposable;
+            } as any as Disposable;
         };
     }
 

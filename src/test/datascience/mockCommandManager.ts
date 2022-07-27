@@ -1,11 +1,11 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 'use strict';
-import { noop } from 'lodash';
 import { Disposable, TextEditor, TextEditorEdit } from 'vscode';
 
-import { ICommandNameArgumentTypeMapping } from '../../client/common/application/commands';
-import { ICommandManager } from '../../client/common/application/types';
+import { ICommandNameArgumentTypeMapping } from '../../commands';
+import { ICommandManager } from '../../platform/common/application/types';
+import { noop } from '../core';
 
 /* eslint-disable @typescript-eslint/no-explicit-any, , no-multi-str,  */
 export class MockCommandManager implements ICommandManager {
@@ -37,7 +37,7 @@ export class MockCommandManager implements ICommandManager {
         T,
         E extends keyof ICommandNameArgumentTypeMapping,
         U extends ICommandNameArgumentTypeMapping[E]
-    >(command: E, ...rest: U): Thenable<T | undefined> {
+    >(command: E, ...rest: U): Thenable<T> {
         const func = this.commands.get(command);
         if (func) {
             const result = func(...rest);
@@ -47,7 +47,7 @@ export class MockCommandManager implements ICommandManager {
             }
             return Promise.resolve(result);
         }
-        return Promise.resolve(undefined);
+        return Promise.resolve(undefined as any);
     }
 
     public getCommands(_filterInternal?: boolean): Thenable<string[]> {

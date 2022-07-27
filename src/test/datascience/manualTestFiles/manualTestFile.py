@@ -13,7 +13,11 @@ plt.plot(x, np.sin(x))
 plt.show()
 
 #%% Test exception
-raise Exception("<This is bracketed>")
+def raiser():
+    raise Exception("<This is bracketed>")
+
+#%% Call exception
+raiser()
 
 # %% Bokeh Plot
 from bokeh.io import output_notebook, show
@@ -43,6 +47,7 @@ for i in trange(100):
 # 2. Profit
 #
 # [Link](http://www.microsoft.com)
+print('post markdown cell')
 
 # %% Magics
 %whos
@@ -79,3 +84,7 @@ alt.Chart(iris).mark_point().encode(
 import plotly.graph_objects as go
 fig = go.Figure(data=go.Bar(y=[2, 3, 1, 5]))
 fig.show()
+
+#%% [markdown]
+# ## Test split cell (code below should run -- see issue https://github.com/microsoft/vscode-jupyter/issues/8543)
+print("hi")

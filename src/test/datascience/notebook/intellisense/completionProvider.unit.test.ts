@@ -6,10 +6,10 @@
 import { assert } from 'chai';
 import * as vscode from 'vscode';
 import {
-    filterCompletions,
+    JupyterCompletionItem,
     generateSortString,
-    JupyterCompletionItem
-} from '../../../../client/datascience/notebook/intellisense/pythonKernelCompletionProvider';
+    filterCompletions
+} from '../../../../standalone/intellisense/pythonKernelCompletionProvider';
 import { MockDocument } from '../../mockDocument';
 
 suite('DataScience - Jupyter Completion Unit Tests', () => {
@@ -28,7 +28,7 @@ suite('DataScience - Jupyter Completion Unit Tests', () => {
             label,
             sortText: generateSortString(index),
             itemText: label,
-            range,
+            range: range ?? new vscode.Range(new vscode.Position(0, 0), new vscode.Position(0, 0)),
             kind
         };
     }
@@ -94,7 +94,7 @@ suite('DataScience - Jupyter Completion Unit Tests', () => {
             new vscode.Position(1, 1)
         );
         assert.isNotEmpty(filtered, 'Filtered list should have an item in it');
-        assert.equal(filtered.length, 1, 'Wrong number of filtered results');
+        assert.equal(filtered.length, 2, 'Wrong number of filtered results');
         assert.ok(
             filtered.find((f) => f.label == 'test.ipynb'),
             'Inside string should show paths'
@@ -118,7 +118,7 @@ suite('DataScience - Jupyter Completion Unit Tests', () => {
             new vscode.Position(1, 7)
         );
         assert.isNotEmpty(filtered, 'Filtered list should have an item in it');
-        assert.equal(filtered.length, 2, 'Wrong number of filtered results');
+        assert.equal(filtered.length, 3, 'Wrong number of filtered results');
         assert.ok(
             filtered.find((f) => f.label == 'test.ipynb'),
             'Inside string didnt work'

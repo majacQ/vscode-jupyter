@@ -7,29 +7,27 @@
 
 import { expect, use } from 'chai';
 import * as chaiAsPromised from 'chai-as-promised';
-import * as path from 'path';
-import * as TypeMoq from 'typemoq';
-import { IFileSystem } from '../../../client/common/platform/types';
-import { EnvironmentVariablesService, parseEnvFile } from '../../../client/common/variables/environment';
+import * as path from '../../../platform/vscode-path/path';
+import { IFileSystemNode } from '../../../platform/common/platform/types.node';
+import { EnvironmentVariablesService, parseEnvFile } from '../../../platform/common/variables/environment.node';
+import { anything, instance, mock, when } from 'ts-mockito';
+import { Uri } from 'vscode';
 
 use(chaiAsPromised);
 
 suite('Environment Variables Service', () => {
     const filename = 'x/y/z/.env';
-    let fs: TypeMoq.IMock<IFileSystem>;
+    let fs: IFileSystemNode;
     let variablesService: EnvironmentVariablesService;
     setup(() => {
-        fs = TypeMoq.Mock.ofType<IFileSystem>(undefined, TypeMoq.MockBehavior.Strict);
-        variablesService = new EnvironmentVariablesService(fs.object);
+        fs = mock<IFileSystemNode>();
+        variablesService = new EnvironmentVariablesService(instance(fs));
     });
-    function verifyAll() {
-        fs.verifyAll();
-    }
     function setFile(fileName: string, text: string) {
-        fs.setup((f) => f.localFileExists(fileName)) // Handle the specific file.
-            .returns(() => Promise.resolve(true)); // The file exists.
-        fs.setup((f) => f.readLocalFile(fileName)) // Handle the specific file.
-            .returns(() => Promise.resolve(text)); // Pretend to read from the file.
+        when(fs.exists(anything())).thenCall((file: Uri) => file.fsPath === Uri.file(fileName).fsPath);
+        when(fs.readFile(anything())).thenCall((file: Uri) =>
+            Promise.resolve(file.fsPath === Uri.file(fileName).fsPath ? text : '')
+        );
     }
 
     suite('parseFile()', () => {
@@ -37,28 +35,22 @@ suite('Environment Variables Service', () => {
             const vars = await variablesService.parseFile(undefined);
 
             expect(vars).to.equal(undefined, 'Variables should be undefined');
-            verifyAll();
         });
 
         test('Custom variables should be undefined with non-existent files', async () => {
-            fs.setup((f) => f.localFileExists(filename)) // Handle the specific file.
-                .returns(() => Promise.resolve(false)); // The file is missing.
+            when(fs.exists(anything())).thenCall((file: Uri) => file.fsPath !== Uri.file(filename).fsPath);
 
             const vars = await variablesService.parseFile(filename);
 
             expect(vars).to.equal(undefined, 'Variables should be undefined');
-            verifyAll();
         });
 
         test('Custom variables should be undefined when folder name is passed instead of a file name', async () => {
             const dirname = 'x/y/z';
-            fs.setup((f) => f.localFileExists(dirname)) // Handle the specific "file".
-                .returns(() => Promise.resolve(false)); // It isn't a "regular" file.
-
+            when(fs.exists(anything())).thenCall((file: Uri) => file.fsPath !== Uri.file(dirname).fsPath);
             const vars = await variablesService.parseFile(dirname);
 
             expect(vars).to.equal(undefined, 'Variables should be undefined');
-            verifyAll();
         });
 
         test('Custom variables should be not undefined with a valid environment file', async () => {
@@ -67,7 +59,6 @@ suite('Environment Variables Service', () => {
             const vars = await variablesService.parseFile(filename);
 
             expect(vars).to.not.equal(undefined, 'Variables should be undefined');
-            verifyAll();
         });
 
         test('Custom variables should be parsed from env file', async () => {
@@ -86,7 +77,6 @@ PYTHONPATH=../workspace5
             expect(Object.keys(vars!)).lengthOf(2, 'Incorrect number of variables');
             expect(vars).to.have.property('X1234PYEXTUNITTESTVAR', '1234', 'X1234PYEXTUNITTESTVAR value is invalid');
             expect(vars).to.have.property('PYTHONPATH', '../workspace5', 'PYTHONPATH value is invalid');
-            verifyAll();
         });
 
         test('PATH and PYTHONPATH from env file should be returned as is', async () => {
@@ -114,7 +104,6 @@ Path=/usr/x:/usr/y
             expect(vars).to.have.property('Y', '2', 'Y value is invalid');
             expect(vars).to.have.property('PYTHONPATH', expectedPythonPath, 'PYTHONPATH value is invalid');
             expect(vars).to.have.property('PATH', expectedPath, 'PATH value is invalid');
-            verifyAll();
         });
 
         test('Simple variable substitution is supported', async () => {
@@ -141,7 +130,6 @@ PYTHON=${BINDIR}/python3\n\
                 'value is invalid'
             );
             expect(vars).to.have.property('PYTHON', '/usr/bin/python3', 'value is invalid');
-            verifyAll();
         });
     });
 
@@ -157,7 +145,6 @@ PYTHON=${BINDIR}/python3\n\
             expect(vars2).to.have.property('ONE', '1', 'Variable overwritten');
             expect(vars2).to.have.property('TWO', 'TWO', 'Incorrect value');
             expect(vars2).to.have.property('THREE', '3', 'Variable not merged');
-            verifyAll();
         });
 
         test('Ensure path variables variables are not merged into target', async () => {
@@ -173,7 +160,6 @@ PYTHON=${BINDIR}/python3\n\
             expect(vars2).to.have.property('ONE', '1', 'Variable overwritten');
             expect(vars2).to.have.property('TWO', 'TWO', 'Incorrect value');
             expect(vars2).to.have.property('THREE', '3', 'Variable not merged');
-            verifyAll();
         });
 
         test('Ensure path variables variables in target are left untouched', async () => {
@@ -195,7 +181,6 @@ PYTHON=${BINDIR}/python3\n\
             expect(vars2).to.have.property('Path', 'PATH', 'Incorrect value');
             expect(vars2).to.have.property('PaTH', 'PATH2', 'Incorrect value');
             expect(vars2).to.have.property('PATH', 'PATH3', 'Incorrect value');
-            verifyAll();
         });
     });
 
@@ -214,8 +199,6 @@ PYTHON=${BINDIR}/python3\n\
             variablesService.appendPath(vars, ' ', '');
             expect(Object.keys(vars)).lengthOf(1, 'Incorrect number of variables');
             expect(vars).to.have.property('ONE', '1', 'Incorrect value');
-
-            verifyAll();
         });
 
         test(`Ensure appending PATH has no effect if an empty string is provided and path does not exist in vars object`, async () => {
@@ -238,8 +221,6 @@ PYTHON=${BINDIR}/python3\n\
             expect(Object.keys(vars)).lengthOf(2, 'Incorrect number of variables');
             expect(vars).to.have.property('ONE', '1', 'Incorrect value');
             expect(vars).to.have.property(pathVariable, 'PATH', 'Incorrect value');
-
-            verifyAll();
         });
 
         test(`Ensure PATH is appeneded irregardless of case`, async () => {
@@ -253,7 +234,6 @@ PYTHON=${BINDIR}/python3\n\
             expect(Object.keys(vars)).lengthOf(2, `Incorrect number of variables ${Object.keys(vars).join(' ')}`);
             expect(vars).to.have.property('ONE', '1', 'Incorrect value');
             expect(vars).to.have.property(`paTh`, `PATH${path.delimiter}${pathToAppend}`, 'Incorrect value');
-            verifyAll();
         });
     });
 
@@ -272,8 +252,6 @@ PYTHON=${BINDIR}/python3\n\
             variablesService.appendPythonPath(vars, ' ', '');
             expect(Object.keys(vars)).lengthOf(1, 'Incorrect number of variables');
             expect(vars).to.have.property('ONE', '1', 'Incorrect value');
-
-            verifyAll();
         });
 
         test('Ensure appending PYTHONPATH has no effect if an empty string is provided and PYTHONPATH does not exist in vars object', async () => {
@@ -293,8 +271,6 @@ PYTHON=${BINDIR}/python3\n\
             expect(Object.keys(vars)).lengthOf(2, 'Incorrect number of variables');
             expect(vars).to.have.property('ONE', '1', 'Incorrect value');
             expect(vars).to.have.property('PYTHONPATH', 'PYTHONPATH', 'Incorrect value');
-
-            verifyAll();
         });
 
         test('Ensure appending PYTHONPATH has no effect if an empty string is provided and PYTHONPATH does not exist in vars object', async () => {
@@ -310,7 +286,6 @@ PYTHON=${BINDIR}/python3\n\
                 `PYTHONPATH${path.delimiter}${pathToAppend}`,
                 'Incorrect value'
             );
-            verifyAll();
         });
     });
 });

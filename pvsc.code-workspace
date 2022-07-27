@@ -17,6 +17,10 @@
         {
             "name": "vscode-python",
             "path": "../vscode-python"
+        },
+        {
+            "name": "vscode-jupyter-powertoys",
+            "path": "../vscode-jupyter-powertoys"
         }
     ],
     "settings": {
@@ -52,16 +56,14 @@
                     "${workspaceFolder:vscode-jupyter}/out/**/*.js",
                     "!${workspaceFolder:vscode-jupyter}/**/node_modules**/*"
                 ],
-                "skipFiles": [
-                    "<node_internals>/**"
-                ]
+                "skipFiles": ["<node_internals>/**"]
             },
             {
                 "type": "extensionHost",
                 "request": "launch",
                 "name": "Jupyter + Python Smoke Tests",
                 "args": [
-                    "${workspaceFolder:vscode-jupyter}/src/testMultiRootWkspc/smokeTests",
+                    "${workspaceFolder:vscode-jupyter}/src/test/testMultiRootWkspc/smokeTests",
                     "--enable-proposed-api",
                     "--extensionDevelopmentPath=${workspaceFolder:vscode-python}",
                     "--extensionDevelopmentPath=${workspaceFolder:vscode-jupyter}",
@@ -80,9 +82,7 @@
                     "${workspaceFolder:vscode-jupyter}/out/**/*.js",
                     "!${workspaceFolder:vscode-jupyter}/**/node_modules**/*"
                 ],
-                "skipFiles": [
-                    "<node_internals>/**"
-                ]
+                "skipFiles": ["<node_internals>/**"]
             },
             {
                 "type": "extensionHost",
@@ -104,9 +104,26 @@
                     "${workspaceFolder:vscode-notebook-renderers}/out/**/*.js",
                     "!${workspaceFolder:vscode-notebook-renderers}/**/node_modules**/*"
                 ],
-                "skipFiles": [
-                    "<node_internals>/**"
-                ]
+                "skipFiles": ["<node_internals>/**"]
+            },
+            {
+                "type": "extensionHost",
+                "request": "launch",
+                "name": "Jupyter + Powertoys Extension",
+                "args": [
+                    "--enable-proposed-api",
+                    "--extensionDevelopmentPath=${workspaceFolder:vscode-jupyter}",
+                    "--extensionDevelopmentPath=${workspaceFolder:vscode-jupyter-powertoys}"
+                ],
+                "stopOnEntry": false,
+                "sourceMaps": true,
+                "outFiles": [
+                    "${workspaceFolder:vscode-jupyter}/out/**/*.js",
+                    "!${workspaceFolder:vscode-jupyter}/**/node_modules**/*",
+                    "${workspaceFolder:vscode-jupyter-powertoys}/out/**/*.js",
+                    "!${workspaceFolder:vscode-jupyter-powertoys}/**/node_modules**/*"
+                ],
+                "skipFiles": ["<node_internals>/**"]
             },
             {
                 "type": "extensionHost",
@@ -125,9 +142,7 @@
                     "${workspaceFolder:vscode-notebook-renderers}/out/**/*.js",
                     "!${workspaceFolder:vscode-notebook-renderers}/**/node_modules**/*"
                 ],
-                "skipFiles": [
-                    "<node_internals>/**"
-                ]
+                "skipFiles": ["<node_internals>/**"]
             },
             {
                 "name": "Native Notebook Tests (Jupyter+Python Extension)",
@@ -144,12 +159,10 @@
                     "VSC_JUPYTER_CI_TEST_GREP": "VSCode Notebook", // Leave as `VSCode Notebook` to run only Notebook tests.
                     "VSC_JUPYTER_CI_TEST_INVERT_GREP": "", // Initialize this to invert the grep (exclude tests with value defined in grep).
                     "CI_PYTHON_PATH": "<PythonPath>", // Update with path to real python interpereter used for testing.
-                    "VSC_FORCE_REAL_JUPYTER": "true", // Enalbe tests that require Jupyter.
                     "VSC_JUPYTER_CI_RUN_NON_PYTHON_NB_TEST": "", // Initialize this to run tests again Julia & other kernels.
-                    "VSC_JUPYTER_RUN_NB_TEST": "true", // Initialize this to run notebook tests (must be using VSC Insiders).
                     "VSC_JUPYTER_WEBVIEW_TEST_MIDDLEWARE": "true", // Initialize to create the webview test middleware
                     "VSC_JUPYTER_LOAD_EXPERIMENTS_FROM_FILE": "true",
-                    "TEST_FILES_SUFFIX": "vscode.test",
+                    "TEST_FILES_SUFFIX": "*.vscode.test,*.vscode.common.test",
                     "VSC_JUPYTER_REMOTE_NATIVE_TEST": "false", // Change to `true` to run the Native Notebook tests with remote jupyter connections.
                     "VSC_JUPYTER_NON_RAW_NATIVE_TEST": "false", // Change to `true` to run the Native Notebook tests with non-raw kernels (i.e. local jupyter server).
                     "XVSC_JUPYTER_INSTRUMENT_CODE_FOR_COVERAGE": "1",
@@ -157,10 +170,12 @@
                 },
                 "stopOnEntry": false,
                 "sourceMaps": true,
-                "outFiles": ["${workspaceFolder:vscode-jupyter}/out/**/*.js", "!${workspaceFolder:vscode-jupyter}/**/node_modules**/*"],
+                "outFiles": [
+                    "${workspaceFolder:vscode-jupyter}/out/**/*.js",
+                    "!${workspaceFolder:vscode-jupyter}/**/node_modules**/*"
+                ],
                 "skipFiles": ["<node_internals>/**"]
-            },
-
+            }
         ],
         "compounds": []
     }

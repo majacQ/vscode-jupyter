@@ -9,6 +9,7 @@
 'use strict';
 
 const gulp = require('gulp');
+const glob = require('glob');
 const spawn = require('cross-spawn');
 const path = require('path');
 const del = require('del');
@@ -16,11 +17,12 @@ const fs = require('fs-extra');
 const _ = require('lodash');
 const nativeDependencyChecker = require('node-has-native-dependencies');
 const flat = require('flat');
-const { argv } = require('yargs');
 const os = require('os');
 const { spawnSync } = require('child_process');
 const isCI = process.env.TF_BUILD !== undefined || process.env.GITHUB_ACTIONS === 'true';
 const webpackEnv = { NODE_OPTIONS: '--max_old_space_size=9096' };
+const { dumpTestSummary } = require('./build/webTestReporter');
+const { Validator } = require('jsonschema');
 
 gulp.task('compile', async (done) => {
     // Use tsc so we can generate source maps that look just like tsc does (gulp-sourcemap does not generate them the same way)
@@ -45,12 +47,63 @@ gulp.task('createNycFolder', async (done) => {
     done();
 });
 
+gulp.task('validateTranslationFiles', (done) => {
+    const validator = new Validator();
+    const schema = {
+        type: 'object',
+        patternProperties: {
+            '^[a-z0-9.]*': {
+                anyOf: [
+                    {
+                        type: ['string'],
+                        additionalProperties: false
+                    },
+                    {
+                        type: ['object'],
+                        properties: {
+                            message: { type: 'string' },
+                            comment: {
+                                type: 'array',
+                                items: {
+                                    type: 'string'
+                                }
+                            }
+                        },
+                        required: ['message'],
+                        additionalProperties: false
+                    }
+                ]
+            }
+        },
+        additionalProperties: false
+    };
+
+    glob.sync('package.nls.*.json', { sync: true }).forEach((file) => {
+        // Verify we can open and parse as JSON.
+        try {
+            const js = JSON.parse(fs.readFileSync(file));
+            const result = validator.validate(js, schema);
+            if (Array.isArray(result.errors) && result.errors.length) {
+                console.error(result.errors);
+                throw new Error(result.errors.map((err) => `${err.property} ${err.message}`).join('\n'));
+            }
+        } catch (ex) {
+            throw new Error(`Error parsing Translation File ${file}, ${ex.message}`);
+        }
+    });
+    done();
+});
+
+gulp.task('printTestResults', async (done) => {
+    dumpTestSummary();
+    done();
+});
+
 gulp.task('output:clean', () => del(['coverage']));
 
-gulp.task('clean:cleanExceptTests', () => del(['clean:vsix', 'out/client', 'out/datascience-ui', 'out/server']));
+gulp.task('clean:cleanExceptTests', () => del(['clean:vsix', 'out', '!out/test']));
 gulp.task('clean:vsix', () => del(['*.vsix']));
-gulp.task('clean:out', () => del(['out/**', '!out', '!out/client_renderer/**']));
-gulp.task('clean:ipywidgets', () => spawnAsync('npm', ['run', 'build-ipywidgets-clean'], webpackEnv));
+gulp.task('clean:out', () => del(['out/**', '!out', '!out/client_renderer/**', '!**/*nls.*.json']));
 
 gulp.task('clean', gulp.parallel('output:clean', 'clean:vsix', 'clean:out'));
 
@@ -86,7 +139,8 @@ gulp.task('checkNpmDependencies', (done) => {
             }
             if (!version.includes(expectedVersion.version)) {
                 errors.push(
-                    `${expectedVersion.name} version needs to be at least ${expectedVersion.version
+                    `${expectedVersion.name} version needs to be at least ${
+                        expectedVersion.version
                     }, current ${version}, ${parent ? `(parent package ${parent})` : ''}`
                 );
             }
@@ -116,23 +170,15 @@ gulp.task('checkNpmDependencies', (done) => {
 });
 
 gulp.task('installPythonLibs', async () => {
-    const output = spawnSync('python -m pip --disable-pip-version-check install -t ./pythonFiles/lib/python --no-cache-dir --implementation py --no-deps --upgrade -r ./requirements.txt');
-    if (output.error){
+    const output = spawnSync(
+        'python -m pip --disable-pip-version-check install -t ./pythonFiles/lib/python --no-cache-dir --implementation py --no-deps --upgrade -r ./requirements.txt'
+    );
+    if (output.error) {
         console.error(output.stderr);
         throw output.error;
     }
 });
 
-gulp.task('compile-ipywidgets', () => buildIPyWidgets());
-
-async function buildIPyWidgets() {
-    // if the output ipywidgest file exists, then no need to re-build.
-    // Barely changes. If making changes, then re-build manually.
-    if (!isCI && fs.existsSync(path.join(__dirname, 'out/ipywidgets/dist/ipywidgets.js'))) {
-        return;
-    }
-    await spawnAsync('npm', ['run', 'build-ipywidgets'], webpackEnv);
-}
 gulp.task('compile-renderers', async () => {
     console.log('Building renderers');
     await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-renderers.config.js');
@@ -142,10 +188,10 @@ gulp.task('compile-viewers', async () => {
     await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-viewers.config.js');
 });
 
-gulp.task(
-    'compile-webviews',
-    gulp.series('compile-ipywidgets', gulp.parallel('compile-viewers', 'compile-renderers'))
-);
+gulp.task('compile-webextension', async () => {
+    await buildWebPackForDevOrProduction('./build/webpack/webpack.extension.web.config.js');
+});
+gulp.task('compile-webviews', gulp.parallel('compile-viewers', 'compile-renderers', 'compile-webextension'));
 
 async function buildWebPackForDevOrProduction(configFile, configNameForProductionBuilds) {
     if (configNameForProductionBuilds) {
@@ -155,67 +201,74 @@ async function buildWebPackForDevOrProduction(configFile, configNameForProductio
         await spawnAsync('npm', ['run', 'webpack', '--', '--config', configFile, '--mode', 'development'], webpackEnv);
     }
 }
-gulp.task('webpack', async () => {
-    // Build node_modules.
+
+gulp.task('webpack-dependencies', async () => {
     await buildWebPackForDevOrProduction('./build/webpack/webpack.extension.dependencies.config.js', 'production');
-    // Build DS stuff (separately as it uses far too much memory and slows down CI).
-    // Individually is faster on CI.
-    await buildIPyWidgets();
-    await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-renderers.config.js', 'production');
-    await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-viewers.config.js', 'production');
-    await buildWebPackForDevOrProduction('./build/webpack/webpack.extension.config.js', 'extension');
 });
+
+gulp.task('webpack-renderers', async () => {
+    await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-renderers.config.js', 'production');
+});
+
+gulp.task('webpack-viewers', async () => {
+    await buildWebPackForDevOrProduction('./build/webpack/webpack.datascience-ui-viewers.config.js', 'production');
+});
+
+gulp.task('webpack-extension-node', async () => {
+    await buildWebPackForDevOrProduction('./build/webpack/webpack.extension.node.config.js', 'extension');
+});
+
+gulp.task('webpack-extension-web', async () => {
+    await buildWebPackForDevOrProduction('./build/webpack/webpack.extension.web.config.js', 'extension');
+});
+
+gulp.task(
+    'webpack',
+    gulp.series(
+        // Dependencies first
+        gulp.parallel('webpack-dependencies', 'webpack-renderers', 'webpack-viewers'),
+        // Then the two extensions
+        gulp.parallel('webpack-extension-node', 'webpack-extension-web')
+    )
+);
 
 gulp.task('updateBuildNumber', async () => {
-    await updateBuildNumber(argv);
+    await updateBuildNumber();
 });
 
-async function updateBuildNumber(args) {
-    if (args && args.buildNumber) {
-        // Edit the version number from the package.json
-        const packageJsonContents = await fs.readFile('package.json', 'utf-8');
-        const packageJson = JSON.parse(packageJsonContents);
+async function updateBuildNumber() {
+    // Edit the version number from the package.json
+    const packageJsonContents = await fs.readFile('package.json', 'utf-8');
+    const packageJson = JSON.parse(packageJsonContents);
 
-        // Change version number
-        // 3rd part of version is limited to Max Int32 numbers (in VSC Marketplace).
-        // Hence build numbers can only be YYYY.MMM.2147483647
-        // NOTE: For each of the following strip the first 3 characters from the build number.
-        //  E.g. if we have build number of `build number = 3264527301, then take 4527301
+    // Change version number
+    // 3rd part of version is limited to Max Int32 numbers (in VSC Marketplace).
+    // Hence build numbers can only be YYYY.MMM.2147483647
+    // NOTE: For each of the following strip the first 3 characters from the build number.
+    //  E.g. if we have build number of `build number = 3264527301, then take 4527301
 
-        // To ensure we can have point releases & insider builds, we're going with the following format:
-        // Insider & Release builds will be YYYY.MMM.100<build number>
-        // When we have a hot fix, we update the version to YYYY.MMM.110<build number>
-        // If we have more hot fixes, they'll be YYYY.MMM.120<build number>, YYYY.MMM.130<build number>, & so on.
+    // To ensure we can have point releases & insider builds, we're going with the following format:
+    // Insider & Release builds will be YYYY.MMM.100<build number>
+    // When we have a hot fix, we update the version to YYYY.MMM.110<build number>
+    // If we have more hot fixes, they'll be YYYY.MMM.120<build number>, YYYY.MMM.130<build number>, & so on.
 
-        const versionParts = packageJson.version.split('.');
-        const buildNumberPortion =
-            versionParts.length > 2 ? versionParts[2].replace(/(\d+)/, args.buildNumber) : args.buildNumber;
-        const newVersion =
-            versionParts.length > 1
-                ? `${versionParts[0]}.${versionParts[1]}.${versionParts[2].substring(
-                    0,
-                    3
-                )}${buildNumberPortion.substring(0, buildNumberPortion.length - 3)}`
-                : packageJson.version;
-        packageJson.version = newVersion;
+    const versionParts = packageJson.version.split('.');
+    // New build is of the form `DDDHHMM` (day of year, hours, minute) (7 digits, as out of the 10 digits first three are reserved for `100` or `101` for patches).
+    // Use date time for build, this way all subsequent builds are incremental and greater than the others before.
+    // Example build for 3Jan 12:45 will be `0031245`, and 16 Feb 8:50 will be `0470845`
+    const today = new Date();
+    const dayCount = [0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
+    const dayOfYear = dayCount[today.getMonth()] + today.getDate() + 1;
+    const buildNumberSuffix = `${dayOfYear.toString().padStart(3, '0')}${(today.getHours() + 1)
+        .toString()
+        .padStart(2, '0')}${(today.getMinutes() + 1).toString().padStart(2, '0')}`;
+    const buildNumber = `${versionParts[2].substring(0, 3)}${buildNumberSuffix}`;
+    const newVersion =
+        versionParts.length > 1 ? `${versionParts[0]}.${versionParts[1]}.${buildNumber}` : packageJson.version;
+    packageJson.version = newVersion;
 
-        // Write back to the package json
-        await fs.writeFile('package.json', JSON.stringify(packageJson, null, 4), 'utf-8');
-
-        // Update the changelog.md if we are told to (this should happen on the release branch)
-        if (args.updateChangelog) {
-            const changeLogContents = await fs.readFile('CHANGELOG.md', 'utf-8');
-            const fixedContents = changeLogContents.replace(
-                /##\s*(\d+)\.(\d+)\.(\d+)\s*\(/,
-                `## $1.$2.${buildNumberPortion} (`
-            );
-
-            // Write back to changelog.md
-            await fs.writeFile('CHANGELOG.md', fixedContents, 'utf-8');
-        }
-    } else {
-        throw Error('buildNumber argument required for updateBuildNumber task');
-    }
+    // Write back to the package json
+    await fs.writeFile('package.json', JSON.stringify(packageJson, null, 4), 'utf-8');
 }
 
 async function buildWebPack(webpackConfigName, args, env) {
@@ -273,6 +326,10 @@ function getAllowedWarningsForWebPack(buildConfig) {
             ];
         case 'extension':
             return [
+                'WARNING in asset size limit: The following asset(s) exceed the recommended size limit (244 KiB).',
+                'WARNING in entrypoint size limit: The following entrypoint(s) combined asset size exceeds the recommended limit (244 KiB). This can impact web performance.',
+                'WARNING in webpack performance recommendations:',
+                'WARNING in ./node_modules/cacheable-request/node_modules/keyv/src/index.js',
                 'WARNING in ./node_modules/encoding/lib/iconv-loader.js',
                 'WARNING in ./node_modules/keyv/src/index.js',
                 'WARNING in ./node_modules/ws/lib/BufferUtil.js',
@@ -300,10 +357,7 @@ function getAllowedWarningsForWebPack(buildConfig) {
 
 gulp.task('prePublishBundle', gulp.series('webpack'));
 gulp.task('checkDependencies', gulp.series('checkNativeDependencies', 'checkNpmDependencies'));
-gulp.task(
-    'prePublishNonBundle',
-    gulp.parallel('compile', gulp.series('compile-webviews'))
-);
+gulp.task('prePublishNonBundle', gulp.parallel('compile', gulp.series('compile-webviews')));
 
 function spawnAsync(command, args, env, rejectOnStdErr = false) {
     env = env || {};
@@ -355,7 +409,29 @@ function hasNativeDependencies() {
     return false;
 }
 
-gulp.task('generateTelemetryMd', async () => {
-    const generator = require('./out/tools/telemetryGenerator');
+async function generateTelemetryMD() {
+    const generator = require('./out/platform/tools/telemetryGenerator.node');
     return generator.default();
-})
+}
+gulp.task('generateTelemetryMd', async () => {
+    return generateTelemetryMD();
+});
+
+gulp.task('validateTelemetryMD', async () => {
+    const telemetryMD = fs.readFileSync(path.join(__dirname, 'TELEMETRY.md'), 'utf-8');
+    await generateTelemetryMD();
+    const telemetryMD2 = fs.readFileSync(path.join(__dirname, 'TELEMETRY.md'), 'utf-8');
+    if (telemetryMD2.trim() !== telemetryMD.trim()) {
+        console.error('Telemetry MD is not valid, please re-run `npm run generateTelemetry`');
+        throw new Error('Telemetry MD is not valid, please re-run `npm run generateTelemetry`');
+    }
+});
+
+gulp.task('verifyUnhandledErrors', async () => {
+    const fileName = path.join(__dirname, 'unhandledErrors.txt');
+    const contents = fs.pathExistsSync(fileName) ? fs.readFileSync(fileName, 'utf8') : '';
+    if (contents.trim().length) {
+        console.error(contents);
+        throw new Error('Unhandled errors detected. Please fix them before merging this PR.', contents);
+    }
+});

@@ -1,11 +1,13 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 import { anything, capture, instance, mock, verify } from 'ts-mockito';
-import { CommandManager } from '../../../client/common/application/commandManager';
-import { ICommandManager } from '../../../client/common/application/types';
-import { JupyterServerSelectorCommand } from '../../../client/datascience/commands/serverSelector';
-import { Commands } from '../../../client/datascience/constants';
-import { JupyterServerSelector } from '../../../client/datascience/jupyter/serverSelector';
+import { Uri } from 'vscode';
+import { CommandManager } from '../../../platform/common/application/commandManager';
+import { ICommandManager } from '../../../platform/common/application/types';
+import { JupyterServerSelector } from '../../../kernels/jupyter/serverSelector';
+import { Commands } from '../../../platform/common/constants';
+import { JupyterServerSelectorCommand } from '../../../notebooks/serverSelector';
+import { JupyterServerUriStorage } from '../../../kernels/jupyter/launcher/serverUriStorage';
 
 /* eslint-disable  */
 suite('DataScience - Server Selector Command', () => {
@@ -16,18 +18,23 @@ suite('DataScience - Server Selector Command', () => {
     setup(() => {
         commandManager = mock(CommandManager);
         serverSelector = mock(JupyterServerSelector);
+        const uriStorage = mock(JupyterServerUriStorage);
 
-        serverSelectorCommand = new JupyterServerSelectorCommand(instance(commandManager), instance(serverSelector));
+        serverSelectorCommand = new JupyterServerSelectorCommand(
+            instance(commandManager),
+            instance(serverSelector),
+            instance(uriStorage)
+        );
     });
 
     test('Register Command', () => {
-        serverSelectorCommand.register();
+        serverSelectorCommand.activate();
 
-        verify(commandManager.registerCommand(Commands.SelectJupyterURI, anything(), instance(serverSelector))).once();
+        verify(commandManager.registerCommand(Commands.SelectJupyterURI, anything(), serverSelectorCommand)).once();
     });
 
     test('Command Handler should invoke ServerSelector', () => {
-        serverSelectorCommand.register();
+        serverSelectorCommand.activate();
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const handler = (capture(commandManager.registerCommand as any).first()[1] as Function).bind(
             serverSelectorCommand
@@ -35,6 +42,22 @@ suite('DataScience - Server Selector Command', () => {
 
         handler();
 
-        verify(serverSelector.selectJupyterURI(true, 'commandPalette')).once();
+        verify(serverSelector.selectJupyterURI('commandPalette')).once();
+    });
+
+    test(`Command Handler should set URI`, () => {
+        serverSelectorCommand.activate();
+        let uri = Uri.parse('http://localhost:1234');
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const handler = (capture(commandManager.registerCommand as any).first()[1] as Function).bind(
+            serverSelectorCommand,
+            false,
+            uri
+        );
+
+        handler();
+
+        verify(serverSelector.setJupyterURIToRemote('http://localhost:1234/')).once();
     });
 });

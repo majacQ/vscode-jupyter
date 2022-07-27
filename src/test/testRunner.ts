@@ -1,3 +1,4 @@
+/* eslint-disable local-rules/dont-use-filename */
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
@@ -7,11 +8,11 @@
 'use strict';
 import * as glob from 'glob';
 import * as Mocha from 'mocha';
-import * as path from 'path';
-import { IS_SMOKE_TEST, MAX_EXTENSION_ACTIVATION_TIME } from './constants';
+import * as path from '../platform/vscode-path/path';
+import { IS_SMOKE_TEST, MAX_EXTENSION_ACTIVATION_TIME } from './constants.node';
 import { noop } from './core';
-import { stopJupyterServer } from './datascience/notebook/helper';
-import { initialize } from './initialize';
+import { stopJupyterServer } from './datascience/notebook/helper.node';
+import { initialize } from './initialize.node';
 
 // Linux: prevent a weird NPE when mocha on Linux requires the window size from the TTY.
 // Since we are not running in a tty environment, we just implement the method statically.
@@ -53,7 +54,7 @@ export async function run(): Promise<void> {
 
     // nteract/transforms-full expects to run in the browser so we have to fake
     // parts of the browser here.
-    if (!IS_SMOKE_TEST) {
+    if (!IS_SMOKE_TEST()) {
         const reactHelpers = require('./datascience/reactHelpers') as typeof import('./datascience/reactHelpers');
         reactHelpers.setUpDomEnvironment();
     }
@@ -68,7 +69,7 @@ export async function run(): Promise<void> {
      * @returns
      */
     function initializationScript() {
-        const ex = new Error('Failed to initialize Python extension for tests after 3 minutes');
+        const ex = new Error('Failed to initialize Python Extension for tests after 3 minutes');
         let timer: NodeJS.Timer | undefined;
         const failed = new Promise((_, reject) => {
             timer = setTimeout(() => reject(ex), MAX_EXTENSION_ACTIVATION_TIME);

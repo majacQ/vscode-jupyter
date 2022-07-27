@@ -4,23 +4,23 @@
 import { assert } from 'chai';
 import * as fs from 'fs-extra';
 import * as os from 'os';
-import * as path from 'path';
+import * as path from '../../platform/vscode-path/path';
 import { Observable } from 'rxjs/Observable';
 import { SemVer } from 'semver';
 import { anything, instance, match, mock, reset, when } from 'ts-mockito';
 import { Matcher } from 'ts-mockito/lib/matcher/type/Matcher';
 import * as TypeMoq from 'typemoq';
 import * as uuid from 'uuid/v4';
-import { CancellationTokenSource, ConfigurationChangeEvent, Disposable, EventEmitter } from 'vscode';
-import { ApplicationShell } from '../../client/common/application/applicationShell';
-import { IApplicationShell, IWorkspaceService } from '../../client/common/application/types';
-import { WorkspaceService } from '../../client/common/application/workspace';
-import { ConfigurationService } from '../../client/common/configuration/service';
-import { PersistentState, PersistentStateFactory } from '../../client/common/persistentState';
-import { FileSystem } from '../../client/common/platform/fileSystem';
-import { IFileSystem } from '../../client/common/platform/types';
-import { ProcessServiceFactory } from '../../client/common/process/processFactory';
-import { PythonExecutionFactory } from '../../client/common/process/pythonExecutionFactory';
+import { CancellationTokenSource, ConfigurationChangeEvent, Disposable, EventEmitter, Uri } from 'vscode';
+import { ApplicationShell } from '../../platform/common/application/applicationShell';
+import { IApplicationShell, IWorkspaceService } from '../../platform/common/application/types';
+import { WorkspaceService } from '../../platform/common/application/workspace.node';
+import { ConfigurationService } from '../../platform/common/configuration/service.node';
+import { PersistentState, PersistentStateFactory } from '../../platform/common/persistentState';
+import { FileSystem } from '../../platform/common/platform/fileSystem.node';
+import { IFileSystem } from '../../platform/common/platform/types';
+import { ProcessServiceFactory } from '../../platform/common/process/processFactory.node';
+import { PythonExecutionFactory } from '../../platform/common/process/pythonExecutionFactory.node';
 import {
     ExecutionResult,
     IProcessService,
@@ -30,40 +30,38 @@ import {
     IPythonExecutionService,
     ObservableExecutionResult,
     Output
-} from '../../client/common/process/types';
-import {
-    IAsyncDisposableRegistry,
-    IConfigurationService,
-    IOutputChannel,
-    IPathUtils,
-    Product
-} from '../../client/common/types';
-import { EXTENSION_ROOT_DIR } from '../../client/constants';
-import { JupyterInterpreterDependencyService } from '../../client/datascience/jupyter/interpreter/jupyterInterpreterDependencyService';
-import { JupyterInterpreterOldCacheStateStore } from '../../client/datascience/jupyter/interpreter/jupyterInterpreterOldCacheStateStore';
-import { JupyterInterpreterService } from '../../client/datascience/jupyter/interpreter/jupyterInterpreterService';
-import { JupyterInterpreterSubCommandExecutionService } from '../../client/datascience/jupyter/interpreter/jupyterInterpreterSubCommandExecutionService';
-import { getKernelId } from '../../client/datascience/jupyter/kernels/helpers';
-import { LocalKernelConnectionMetadata } from '../../client/datascience/jupyter/kernels/types';
-import { HostJupyterExecution } from '../../client/datascience/jupyter/liveshare/hostJupyterExecution';
-import { NotebookStarter } from '../../client/datascience/jupyter/notebookStarter';
-import { LocalKernelFinder } from '../../client/datascience/kernel-launcher/localKernelFinder';
-import { ILocalKernelFinder } from '../../client/datascience/kernel-launcher/types';
-import {
-    IJupyterKernelSpec,
-    IJupyterSubCommandExecutionService,
-    INotebookServer
-} from '../../client/datascience/types';
-import { IEnvironmentActivationService } from '../../client/interpreter/activation/types';
-import { IInterpreterService } from '../../client/interpreter/contracts';
-import { ServiceContainer } from '../../client/ioc/container';
-import { PythonEnvironment } from '../../client/pythonEnvironments/info';
-import { areInterpreterPathsSame } from '../../client/pythonEnvironments/info/interpreter';
-import { getOSType, OSType } from '../common';
+} from '../../platform/common/process/types.node';
+import { IAsyncDisposableRegistry, IConfigurationService, IOutputChannel } from '../../platform/common/types';
+import { EXTENSION_ROOT_DIR } from '../../platform/constants.node';
+import { IEnvironmentActivationService } from '../../platform/interpreter/activation/types';
+import { IInterpreterService } from '../../platform/interpreter/contracts';
+import { ServiceContainer } from '../../platform/ioc/container';
+import { PythonEnvironment } from '../../platform/pythonEnvironments/info';
+import { areInterpreterPathsSame } from '../../platform/pythonEnvironments/info/interpreter';
+import { getKernelId } from '../../kernels/helpers';
+import { Product } from '../../kernels/installer/types';
+import { JupyterInterpreterDependencyService } from '../../kernels/jupyter/interpreter/jupyterInterpreterDependencyService.node';
+import { JupyterInterpreterOldCacheStateStore } from '../../kernels/jupyter/interpreter/jupyterInterpreterOldCacheStateStore.node';
+import { JupyterInterpreterService } from '../../kernels/jupyter/interpreter/jupyterInterpreterService.node';
+import { JupyterInterpreterSubCommandExecutionService } from '../../kernels/jupyter/interpreter/jupyterInterpreterSubCommandExecutionService.node';
+import { HostJupyterExecution } from '../../kernels/jupyter/launcher/liveshare/hostJupyterExecution';
+import { NotebookStarter } from '../../kernels/jupyter/launcher/notebookStarter.node';
+import { JupyterPaths } from '../../kernels/raw/finder/jupyterPaths.node';
+import { LocalKernelFinder } from '../../kernels/raw/finder/localKernelFinder.node';
+import { ILocalKernelFinder } from '../../kernels/raw/types';
+import { IJupyterConnection, IJupyterKernelSpec, LocalKernelConnectionMetadata } from '../../kernels/types';
+import { EXTENSION_ROOT_DIR_FOR_TESTS } from '../constants.node';
 import { noop } from '../core';
 import { MockOutputChannel } from '../mockClasses';
 import { MockJupyterServer } from './mockJupyterServer';
 import { MockJupyterSettings } from './mockJupyterSettings';
+import { DisplayOptions } from '../../kernels/displayOptions';
+import { INotebookServerFactory } from '../../kernels/jupyter/types';
+import { IJupyterSubCommandExecutionService } from '../../kernels/jupyter/types.node';
+import { SystemVariables } from '../../platform/common/variables/systemVariables.node';
+import { getOSType, OSType } from '../../platform/common/utils/platform';
+import { JupyterServerUriStorage } from '../../kernels/jupyter/launcher/serverUriStorage';
+import { JupyterConnection } from '../../kernels/jupyter/jupyterConnection';
 
 /* eslint-disable @typescript-eslint/no-explicit-any, , no-multi-str,  */
 class DisposableRegistry implements IAsyncDisposableRegistry {
@@ -100,33 +98,33 @@ suite('Jupyter Execution', async () => {
     const disposableRegistry = new DisposableRegistry();
     const dummyEvent = new EventEmitter<void>();
     const configChangeEvent = new EventEmitter<ConfigurationChangeEvent>();
-    const pythonSettings = new MockJupyterSettings(undefined);
+    const pythonSettings = new MockJupyterSettings(undefined, SystemVariables, 'node', instance(workspaceService));
     const jupyterOnPath = getOSType() === OSType.Windows ? '/foo/bar/jupyter.exe' : '/foo/bar/jupyter';
     let ipykernelInstallCount = 0;
     let notebookStarter: NotebookStarter;
     const workingPython: PythonEnvironment = {
-        path: '/foo/bar/python.exe',
+        uri: Uri.file('/foo/bar/python.exe'),
         version: new SemVer('3.6.6-final'),
         sysVersion: '1.0.0.0',
         sysPrefix: 'Python'
     };
 
     const missingKernelPython: PythonEnvironment = {
-        path: '/foo/baz/python.exe',
+        uri: Uri.file('/foo/baz/python.exe'),
         version: new SemVer('3.1.1-final'),
         sysVersion: '1.0.0.0',
         sysPrefix: 'Python'
     };
 
     const missingNotebookPython: PythonEnvironment = {
-        path: '/bar/baz/python.exe',
+        uri: Uri.file('/bar/baz/python.exe'),
         version: new SemVer('2.1.1-final'),
         sysVersion: '1.0.0.0',
         sysPrefix: 'Python'
     };
 
     const missingNotebookPython2: PythonEnvironment = {
-        path: '/two/baz/python.exe',
+        uri: Uri.file('/two/baz/python.exe'),
         version: new SemVer('2.1.1'),
         sysVersion: '1.0.0.0',
         sysPrefix: 'Python'
@@ -142,7 +140,7 @@ suite('Jupyter Execution', async () => {
     });
 
     setup(() => {
-        workingKernelSpec = createTempSpec(workingPython.path);
+        workingKernelSpec = createTempSpec(workingPython.uri.fsPath);
         ipykernelInstallCount = 0;
         // eslint-disable-next-line no-invalid-this
     });
@@ -163,10 +161,10 @@ suite('Jupyter Execution', async () => {
             super();
             this.func = func;
         }
-        public match(value: Object): boolean {
+        public override match(value: Object): boolean {
             return this.func(value);
         }
-        public toString(): string {
+        public override toString(): string {
             return 'FunctionMatcher';
         }
     }
@@ -545,7 +543,7 @@ suite('Jupyter Execution', async () => {
         // Don't mind the goofy path here. It's supposed to not find the item. It's just testing the internal regex works
         setupProcessServiceExecWithFunc(
             service,
-            workingPython.path,
+            workingPython.uri.fsPath,
             ['-m', 'jupyter', 'kernelspec', 'list', '--json'],
             () => {
                 // Return different results after we install our kernel
@@ -581,13 +579,13 @@ suite('Jupyter Execution', async () => {
         ]);
         setupProcessServiceExec(
             service,
-            workingPython.path,
+            workingPython.uri.fsPath,
             ['-m', 'jupyter', 'kernelspec', 'list', '--json'],
             Promise.resolve({ stdout: JSON.stringify(kernelSpecs2) })
         );
         setupProcessServiceExecWithFunc(
             service,
-            workingPython.path,
+            workingPython.uri.fsPath,
             [
                 '-m',
                 'ipykernel',
@@ -614,20 +612,20 @@ suite('Jupyter Execution', async () => {
         );
         setupProcessServiceExec(
             service,
-            workingPython.path,
+            workingPython.uri.fsPath,
             [getServerInfoPath],
             Promise.resolve({ stdout: 'failure to get server infos' })
         );
         setupProcessServiceExecObservable(
             service,
-            workingPython.path,
+            workingPython.uri.fsPath,
             ['-m', 'jupyter', 'kernelspec', 'list', '--json'],
             [],
             []
         );
         setupProcessServiceExecObservable(
             service,
-            workingPython.path,
+            workingPython.uri.fsPath,
             [
                 '-m',
                 'jupyter',
@@ -646,7 +644,7 @@ suite('Jupyter Execution', async () => {
         const kernelSpecs = createKernelSpecs([{ name: 'working', resourceDir: path.dirname(workingKernelSpec) }]);
         setupProcessServiceExec(
             service,
-            missingKernelPython.path,
+            missingKernelPython.uri.fsPath,
             ['-m', 'jupyter', 'kernelspec', 'list', '--json'],
             Promise.resolve({ stdout: JSON.stringify(kernelSpecs) })
         );
@@ -658,20 +656,20 @@ suite('Jupyter Execution', async () => {
         );
         setupProcessServiceExec(
             service,
-            missingKernelPython.path,
+            missingKernelPython.uri.fsPath,
             [getServerInfoPath],
             Promise.resolve({ stdout: 'failure to get server infos' })
         );
         setupProcessServiceExecObservable(
             service,
-            missingKernelPython.path,
+            missingKernelPython.uri.fsPath,
             ['-m', 'jupyter', 'kernelspec', 'list', '--json'],
             [],
             []
         );
         setupProcessServiceExecObservable(
             service,
-            missingKernelPython.path,
+            missingKernelPython.uri.fsPath,
             [
                 '-m',
                 'jupyter',
@@ -765,10 +763,16 @@ suite('Jupyter Execution', async () => {
         when(interpreterService.getInterpreterDetails(match('/foo/baz/python.exe'))).thenResolve(missingKernelPython);
         when(interpreterService.getInterpreterDetails(match('/bar/baz/python.exe'))).thenResolve(missingNotebookPython);
         when(interpreterService.getInterpreterDetails(argThat((o) => !o.includes || !o.includes('python')))).thenReject(
-            ('Unknown interpreter' as any) as Error
+            'Unknown interpreter' as any as Error
         );
         if (runInDocker) {
-            when(fileSystem.readLocalFile('/proc/self/cgroup')).thenResolve('hello docker world');
+            when(fileSystem.readFile(anything())).thenCall((uri: Uri) => {
+                if (uri.fsPath === '/proc/self/cgroup') {
+                    return Promise.resolve('hello docker world');
+                } else {
+                    return Promise.resolve('');
+                }
+            });
         }
         // Create our working python and process service.
         const workingService = createTypeMoq<IPythonExecutionService>('working');
@@ -783,34 +787,40 @@ suite('Jupyter Execution', async () => {
         setupWorkingProcessService(processService, notebookStdErr);
         setupMissingKernelProcessService(processService, notebookStdErr);
         setupPathProcessService(jupyterOnPath, processService, notebookStdErr);
-        when(executionFactory.create(argThat((o) => o.pythonPath && o.pythonPath === workingPython.path))).thenResolve(
-            workingService.object
-        );
         when(
-            executionFactory.create(argThat((o) => o.pythonPath && o.pythonPath === missingKernelPython.path))
+            executionFactory.create(argThat((o) => o.interpreter && o.interpreter.uri === workingPython.uri))
+        ).thenResolve(workingService.object);
+        when(
+            executionFactory.create(argThat((o) => o.interpreter && o.interpreter.uri === missingKernelPython.uri))
         ).thenResolve(missingKernelService.object);
         when(
-            executionFactory.create(argThat((o) => o.pythonPath && o.pythonPath === missingNotebookPython.path))
+            executionFactory.create(argThat((o) => o.interpreter && o.interpreter.uri === missingNotebookPython.uri))
         ).thenResolve(missingNotebookService.object);
         when(
-            executionFactory.create(argThat((o) => o.pythonPath && o.pythonPath === missingNotebookPython2.path))
+            executionFactory.create(argThat((o) => o.interpreter && o.interpreter.uri === missingNotebookPython2.uri))
         ).thenResolve(missingNotebookService2.object);
 
         when(
-            executionFactory.createDaemon(argThat((o) => o.pythonPath && o.pythonPath === workingPython.path))
-        ).thenResolve((workingService.object as unknown) as IPythonDaemonExecutionService);
+            executionFactory.createDaemon(argThat((o) => o.interpreter && o.interpreter.uri === workingPython.uri))
+        ).thenResolve(workingService.object as unknown as IPythonDaemonExecutionService);
 
         when(
-            executionFactory.createDaemon(argThat((o) => o.pythonPath && o.pythonPath === missingKernelPython.path))
-        ).thenResolve((missingKernelService.object as unknown) as IPythonDaemonExecutionService);
+            executionFactory.createDaemon(
+                argThat((o) => o.interpreter && o.interpreter.uri === missingKernelPython.uri)
+            )
+        ).thenResolve(missingKernelService.object as unknown as IPythonDaemonExecutionService);
 
         when(
-            executionFactory.createDaemon(argThat((o) => o.pythonPath && o.pythonPath === missingNotebookPython.path))
-        ).thenResolve((missingNotebookService.object as unknown) as IPythonDaemonExecutionService);
+            executionFactory.createDaemon(
+                argThat((o) => o.interpreter && o.interpreter.uri === missingNotebookPython.uri)
+            )
+        ).thenResolve(missingNotebookService.object as unknown as IPythonDaemonExecutionService);
 
         when(
-            executionFactory.createDaemon(argThat((o) => o.pythonPath && o.pythonPath === missingNotebookPython2.path))
-        ).thenResolve((missingNotebookService2.object as unknown) as IPythonDaemonExecutionService);
+            executionFactory.createDaemon(
+                argThat((o) => o.interpreter && o.interpreter.uri === missingNotebookPython2.uri)
+            )
+        ).thenResolve(missingNotebookService2.object as unknown as IPythonDaemonExecutionService);
 
         let activeService = workingService;
         if (activeInterpreter === missingKernelPython) {
@@ -826,22 +836,22 @@ suite('Jupyter Execution', async () => {
         ).thenResolve(activeService.object);
         when(
             executionFactory.createActivatedEnvironment(
-                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, workingPython.path))
+                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, workingPython.uri))
             )
         ).thenResolve(workingService.object);
         when(
             executionFactory.createActivatedEnvironment(
-                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, missingKernelPython.path))
+                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, missingKernelPython.uri))
             )
         ).thenResolve(missingKernelService.object);
         when(
             executionFactory.createActivatedEnvironment(
-                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, missingNotebookPython.path))
+                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, missingNotebookPython.uri))
             )
         ).thenResolve(missingNotebookService.object);
         when(
             executionFactory.createActivatedEnvironment(
-                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, missingNotebookPython2.path))
+                argThat((o) => o && areInterpreterPathsSame(o.interpreter.path, missingNotebookPython2.uri))
             )
         ).thenResolve(missingNotebookService2.object);
         when(processServiceFactory.create()).thenResolve(processService.object);
@@ -866,15 +876,12 @@ suite('Jupyter Execution', async () => {
             allowImportFromNotebook: true,
             jupyterLaunchTimeout: 10,
             jupyterLaunchRetries: 3,
-            jupyterServerType: 'local',
             // eslint-disable-next-line no-template-curly-in-string
             notebookFileRoot: '${fileDirname}',
-            changeDirOnImportExport: true,
             useDefaultConfigForJupyter: true,
             jupyterInterruptTimeout: 10000,
             searchForJupyter: !skipSearch,
             showCellInputCode: true,
-            collapseCellInputCodeByDefault: true,
             allowInput: true,
             maxOutputSize: 400,
             enableScrollingForCellOutputs: true,
@@ -895,7 +902,10 @@ suite('Jupyter Execution', async () => {
 
         // Service container also needs to generate jupyter servers. However we can't use a mock as that messes up returning
         // this object from a promise
-        when(serviceContainer.get<INotebookServer>(INotebookServer)).thenReturn(new MockJupyterServer());
+        const factory = mock<INotebookServerFactory>();
+        when(factory.createNotebookServer(anything())).thenCall(
+            (connection: IJupyterConnection) => new MockJupyterServer(connection)
+        );
 
         // We also need a file system
         const tempFile = {
@@ -905,12 +915,18 @@ suite('Jupyter Execution', async () => {
             filePath: '/foo/bar/baz.py'
         };
         when(fileSystem.createTemporaryLocalFile(anything())).thenResolve(tempFile);
-        when(fileSystem.createLocalDirectory(anything())).thenResolve();
-        when(fileSystem.deleteLocalDirectory(anything())).thenResolve();
-        when(fileSystem.localFileExists(workingKernelSpec)).thenResolve(true);
-        when(fileSystem.readLocalFile(workingKernelSpec)).thenResolve(
-            '{"display_name":"Python 3","language":"python","argv":["/foo/bar/python.exe","-m","ipykernel_launcher","-f","{connection_file}"]}'
-        );
+        when(fileSystem.createDirectory(anything())).thenResolve();
+        when(fileSystem.delete(anything())).thenResolve();
+        when(fileSystem.exists(anything())).thenCall((file: Uri) => file.fsPath === Uri.file(workingKernelSpec).fsPath);
+        when(fileSystem.readFile(anything())).thenCall((uri: Uri) => {
+            if (uri.fsPath === workingKernelSpec) {
+                return Promise.resolve(
+                    '{"display_name":"Python 3","language":"python","argv":["/foo/bar/python.exe","-m","ipykernel_launcher","-f","{connection_file}"]}'
+                );
+            } else {
+                return Promise.resolve('');
+            }
+        });
 
         const persistentSateFactory = mock(PersistentStateFactory);
         const persistentState = mock(PersistentState);
@@ -954,13 +970,20 @@ suite('Jupyter Execution', async () => {
         when(oldStore.getCachedInterpreterPath()).thenReturn();
         const jupyterInterpreterService = mock(JupyterInterpreterService);
         when(jupyterInterpreterService.getSelectedInterpreter(anything())).thenResolve(activeInterpreter);
+        const jupyterPaths = mock<JupyterPaths>();
+        when(jupyterPaths.getKernelSpecTempRegistrationFolder()).thenResolve(
+            Uri.file(path.join(EXTENSION_ROOT_DIR_FOR_TESTS, 'temp', 'jupyter', 'kernels'))
+        );
+        const envActivationService = mock<IEnvironmentActivationService>();
+        when(envActivationService.getActivatedEnvironmentVariables(anything(), anything())).thenResolve();
         const jupyterCmdExecutionService = new JupyterInterpreterSubCommandExecutionService(
             instance(jupyterInterpreterService),
             instance(interpreterService),
             instance(dependencyService),
             instance(executionFactory),
             instance(mock<IOutputChannel>()),
-            instance(mock<IPathUtils>())
+            instance(jupyterPaths),
+            instance(envActivationService)
         );
         when(serviceContainer.get<IJupyterSubCommandExecutionService>(IJupyterSubCommandExecutionService)).thenReturn(
             jupyterCmdExecutionService
@@ -974,31 +997,34 @@ suite('Jupyter Execution', async () => {
         const kernelFinder = mock(LocalKernelFinder);
         const kernelSpec: IJupyterKernelSpec = {
             name: 'somename',
-            path: 'python',
+            executable: 'python',
             argv: ['python'],
             display_name: 'somename'
         };
         const kernelMetadata: LocalKernelConnectionMetadata = {
-            kind: 'startUsingKernelSpec',
+            kind: 'startUsingLocalKernelSpec',
             kernelSpec,
             id: getKernelId(kernelSpec)
         };
-        when(kernelFinder.findKernel(anything(), anything(), anything())).thenResolve(kernelMetadata);
+        when(kernelFinder.listKernels(anything(), anything())).thenResolve([kernelMetadata]);
         when(serviceContainer.get<NotebookStarter>(NotebookStarter)).thenReturn(notebookStarter);
         when(serviceContainer.get<ILocalKernelFinder>(ILocalKernelFinder)).thenReturn(instance(kernelFinder));
+        const serverFactory = mock<INotebookServerFactory>();
+        const serverUriStorage = mock(JupyterServerUriStorage);
+        const connection = mock<JupyterConnection>();
         return {
             executionService: activeService.object,
             jupyterExecution: new HostJupyterExecution(
                 instance(interpreterService),
-                (disposableRegistry as unknown) as any[],
+                disposableRegistry as unknown as any[],
                 disposableRegistry,
-                instance(fileSystem),
                 instance(workspaceService),
                 instance(configService),
                 notebookStarter,
-                instance(application),
-                instance(jupyterOutputChannel),
-                instance(serviceContainer)
+                jupyterCmdExecutionService,
+                instance(serverFactory),
+                instance(serverUriStorage),
+                instance(connection)
             )
         };
     }
@@ -1009,7 +1035,20 @@ suite('Jupyter Execution', async () => {
         await assert.eventually.equal(jupyterExecutionFactory.isNotebookSupported(), true, 'Notebook not supported');
         const usableInterpreter = await jupyterExecutionFactory.getUsableJupyterPython();
         assert.isOk(usableInterpreter, 'Usable interpreter not found');
-        await assert.isFulfilled(jupyterExecutionFactory.connectToNotebookServer(), 'Should be able to start a server');
+        const ui = new DisplayOptions(true);
+        const token = new CancellationTokenSource();
+        try {
+            await assert.isFulfilled(
+                jupyterExecutionFactory.connectToNotebookServer(
+                    { ui, resource: undefined, localJupyter: true },
+                    token.token
+                ),
+                'Should be able to start a server'
+            );
+        } finally {
+            ui.dispose();
+            token.dispose();
+        }
     }).timeout(10000);
 
     test('Includes correct args for running in docker', async () => {
@@ -1023,13 +1062,36 @@ suite('Jupyter Execution', async () => {
         await assert.eventually.equal(jupyterExecutionFactory.isNotebookSupported(), true, 'Notebook not supported');
         const usableInterpreter = await jupyterExecutionFactory.getUsableJupyterPython();
         assert.isOk(usableInterpreter, 'Usable interpreter not found');
-        await assert.isFulfilled(jupyterExecutionFactory.connectToNotebookServer(), 'Should be able to start a server');
+        const ui = new DisplayOptions(true);
+        const token = new CancellationTokenSource();
+        try {
+            await assert.isFulfilled(
+                jupyterExecutionFactory.connectToNotebookServer(
+                    { ui, resource: undefined, localJupyter: true },
+                    token.token
+                ),
+                'Should be able to start a server'
+            );
+        } finally {
+            ui.dispose();
+            token.dispose();
+        }
     }).timeout(10000);
 
     test('Failing notebook throws exception', async () => {
         const execution = createExecution(missingNotebookPython);
         when(interpreterService.getInterpreters(anything())).thenResolve([missingNotebookPython]);
-        await assert.isRejected(execution.connectToNotebookServer(), 'Running cells requires jupyter.');
+        const ui = new DisplayOptions(true);
+        const token = new CancellationTokenSource();
+        try {
+            await assert.isRejected(
+                execution.connectToNotebookServer({ ui, resource: undefined, localJupyter: true }, token.token),
+                'Running cells requires jupyter package.'
+            );
+        } finally {
+            ui.dispose();
+            token.dispose();
+        }
     }).timeout(10000);
 
     test('Missing kernel python still finds interpreter', async () => {
@@ -1040,7 +1102,7 @@ suite('Jupyter Execution', async () => {
         assert.isOk(usableInterpreter, 'Usable interpreter not found');
         if (usableInterpreter) {
             // Linter
-            assert.equal(usableInterpreter.path, missingKernelPython.path);
+            assert.equal(usableInterpreter.uri, missingKernelPython.uri);
             assert.equal(
                 usableInterpreter.version!.major,
                 missingKernelPython.version!.major,
@@ -1058,5 +1120,16 @@ suite('Jupyter Execution', async () => {
         const execution = createExecution(missingNotebookPython);
         when(interpreterService.getActiveInterpreter(anything())).thenResolve(missingNotebookPython);
         await assert.eventually.equal(execution.isNotebookSupported(), false);
+    });
+
+    test('Interpreter paths being the same', async () => {
+        assert.ok(
+            areInterpreterPathsSame(
+                Uri.file(`/opt/hostedtoolcache/Python/3.9.12/x64/bin`),
+                Uri.file(`/opt/hostedtoolcache/python/3.9.12/x64/bin`),
+                getOSType(),
+                true
+            )
+        );
     });
 });

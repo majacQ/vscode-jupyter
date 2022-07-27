@@ -24,29 +24,28 @@ import {
     IDocumentManager,
     IVSCodeNotebook,
     IWorkspaceService
-} from '../../../client/common/application/types';
-import { IFileSystem } from '../../../client/common/platform/types';
-import { IConfigurationService } from '../../../client/common/types';
-import { Commands, EditorContexts } from '../../../client/datascience/constants';
-import { CodeLensFactory } from '../../../client/datascience/editor-integration/codeLensFactory';
-import { DataScienceCodeLensProvider } from '../../../client/datascience/editor-integration/codelensprovider';
-import { CodeWatcher } from '../../../client/datascience/editor-integration/codewatcher';
-import {
-    ICodeWatcher,
-    IDataScienceErrorHandler,
-    IDebugLocationTracker,
-    IInteractiveWindow,
-    IInteractiveWindowProvider
-} from '../../../client/datascience/types';
-import { IServiceContainer } from '../../../client/ioc/types';
-import { ICodeExecutionHelper } from '../../../client/terminals/types';
+} from '../../../platform/common/application/types';
+import { IFileSystem } from '../../../platform/common/platform/types';
+import { IConfigurationService } from '../../../platform/common/types';
+import { CodeLensFactory } from '../../../interactive-window/editor-integration/codeLensFactory';
+import { DataScienceCodeLensProvider } from '../../../interactive-window/editor-integration/codelensprovider';
+import { CodeWatcher } from '../../../interactive-window/editor-integration/codewatcher';
+import { IServiceContainer } from '../../../platform/ioc/types';
+import { ICodeExecutionHelper } from '../../../platform/terminals/types';
 import { MockDocumentManager } from '../mockDocumentManager';
 import { MockJupyterSettings } from '../mockJupyterSettings';
 import { MockEditor } from '../mockTextEditor';
 import { createDocument } from './helpers';
-import { disposeAllDisposables } from '../../../client/common/helpers';
-import { CellHashProviderFactory } from '../../../client/datascience/editor-integration/cellHashProviderFactory';
-import { IKernel, IKernelProvider } from '../../../client/datascience/jupyter/kernels/types';
+import { disposeAllDisposables } from '../../../platform/common/helpers';
+import { IKernel, IKernelProvider } from '../../../platform/../kernels/types';
+import { InteractiveCellResultError } from '../../../platform/errors/interactiveCellResultError';
+import { ICodeWatcher, IGeneratedCodeStorageFactory } from '../../../interactive-window/editor-integration/types';
+import { IInteractiveWindowProvider, IInteractiveWindow } from '../../../interactive-window/types';
+import { Commands, EditorContexts } from '../../../platform/common/constants';
+import { SystemVariables } from '../../../platform/common/variables/systemVariables.node';
+import { IDebugLocationTracker } from '../../../notebooks/debugger/debuggingTypes';
+import { noop } from '../../core';
+import { IDataScienceErrorHandler } from '../../../kernels/errors/types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -87,7 +86,7 @@ suite('DataScience Code Watcher Unit Tests', () => {
     let debugService: TypeMoq.IMock<IDebugService>;
     let debugLocationTracker: TypeMoq.IMock<IDebugLocationTracker>;
     const contexts: Map<string, boolean> = new Map<string, boolean>();
-    const jupyterSettings = new MockJupyterSettings(undefined);
+    let jupyterSettings: MockJupyterSettings;
     const disposables: Disposable[] = [];
 
     setup(() => {
@@ -102,20 +101,19 @@ suite('DataScience Code Watcher Unit Tests', () => {
         helper = TypeMoq.Mock.ofType<ICodeExecutionHelper>();
         commandManager = TypeMoq.Mock.ofType<ICommandManager>();
         debugService = TypeMoq.Mock.ofType<IDebugService>();
+        const workspace = mock<IWorkspaceService>();
 
         // Setup default settings
+        jupyterSettings = new MockJupyterSettings(undefined, SystemVariables, 'node', instance(workspace));
         jupyterSettings.assign({
             allowImportFromNotebook: true,
             jupyterLaunchTimeout: 20000,
             jupyterLaunchRetries: 3,
-            jupyterServerType: 'local',
             notebookFileRoot: 'WORKSPACE',
-            changeDirOnImportExport: true,
             useDefaultConfigForJupyter: true,
             jupyterInterruptTimeout: 10000,
             searchForJupyter: true,
             showCellInputCode: true,
-            collapseCellInputCodeByDefault: true,
             allowInput: true,
             maxOutputSize: 400,
             enableScrollingForCellOutputs: true,
@@ -126,12 +124,13 @@ suite('DataScience Code Watcher Unit Tests', () => {
             markdownRegularExpression: '^(#\\s*%%\\s*\\[markdown\\]|#\\s*\\<markdowncell\\>)',
             enableCellCodeLens: true,
             generateSVGPlots: false,
-            runStartupCommands: '',
+            runStartupCommands: [],
             debugJustMyCode: true,
             variableQueries: [],
             jupyterCommandLineArguments: [],
             widgetScriptSources: [],
-            interactiveWindowMode: 'single'
+            interactiveWindowMode: 'single',
+            newCellOnRunLast: true
         });
         debugService.setup((d) => d.activeDebugSession).returns(() => undefined);
 
@@ -144,14 +143,13 @@ suite('DataScience Code Watcher Unit Tests', () => {
         // Setup config service
         configService.setup((c) => c.getSettings(TypeMoq.It.isAny())).returns(() => jupyterSettings);
 
-        const workspace = mock<IWorkspaceService>();
         when(workspace.isTrusted).thenReturn(true);
         const trustedEvent = new EventEmitter<void>();
         when(workspace.onDidGrantWorkspaceTrust).thenReturn(trustedEvent.event);
         const notebook = mock<IVSCodeNotebook>();
         const execStateChangeEvent = new EventEmitter<NotebookCellExecutionStateChangeEvent>();
         when(notebook.onDidChangeNotebookCellExecutionState).thenReturn(execStateChangeEvent.event);
-        const hashProviderFactory = mock<CellHashProviderFactory>();
+        const storageFactory = mock<IGeneratedCodeStorageFactory>();
         const kernelProvider = mock<IKernelProvider>();
         const kernelDisposedEvent = new EventEmitter<IKernel>();
         when(kernelProvider.onDidDisposeKernel).thenReturn(kernelDisposedEvent.event);
@@ -160,12 +158,11 @@ suite('DataScience Code Watcher Unit Tests', () => {
         disposables.push(kernelDisposedEvent);
         const codeLensFactory = new CodeLensFactory(
             configService.object,
-            fileSystem.object,
             documentManager.object,
             instance(workspace),
             instance(notebook),
             disposables,
-            instance(hashProviderFactory),
+            instance(storageFactory),
             instance(kernelProvider)
         );
         serviceContainer
@@ -174,7 +171,6 @@ suite('DataScience Code Watcher Unit Tests', () => {
                 () =>
                     new CodeWatcher(
                         interactiveWindowProvider.object,
-                        fileSystem.object,
                         configService.object,
                         documentManager.object,
                         helper.object,
@@ -205,7 +201,6 @@ suite('DataScience Code Watcher Unit Tests', () => {
 
         codeWatcher = new CodeWatcher(
             interactiveWindowProvider.object,
-            fileSystem.object,
             configService.object,
             documentManager.object,
             helper.object,
@@ -444,10 +439,10 @@ fourth line
     });
 
     test('Test the RunCell command', async () => {
-        const fileName = Uri.file('test.py');
+        const fileName = Uri.file('test.py').fsPath;
         const version = 1;
         const testString = '#%%\ntesting';
-        const document = createDocument(testString, fileName.fsPath, version, TypeMoq.Times.atLeastOnce(), true);
+        const document = createDocument(testString, fileName, version, TypeMoq.Times.atLeastOnce(), true);
         const testRange = new Range(0, 0, 1, 7);
 
         codeWatcher.setDocument(document.object);
@@ -457,12 +452,8 @@ fourth line
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue(testString),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(0),
-                    TypeMoq.It.is((ed: TextEditor) => {
-                        return textEditor.object === ed;
-                    }),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName),
+                    TypeMoq.It.isValue(0)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -483,25 +474,28 @@ fourth line
 testing1
 #%%
 testing2`;
-        const document = createDocument(inputText, fileName.fsPath, version, TypeMoq.Times.atLeastOnce());
-
-        document
-            .setup((doc) => doc.getText())
-            .returns(() => inputText)
-            .verifiable(TypeMoq.Times.exactly(1));
+        const document = createDocument(inputText, fileName.fsPath, version, TypeMoq.Times.atLeastOnce(), true);
 
         codeWatcher.setDocument(document.object);
 
-        // Set up our expected calls to add code
-        // RunFileInteractive should run the entire file in one block, not cell by cell like RunAllCells
+        // Set up our expected calls to add code. It should split cells
         activeInteractiveWindow
             .setup((h) =>
                 h.addCode(
-                    TypeMoq.It.isValue(inputText),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(0),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.isValue('#%%\ntesting1'),
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(0)
+                )
+            )
+            .returns(() => Promise.resolve(true))
+            .verifiable(TypeMoq.Times.once());
+
+        activeInteractiveWindow
+            .setup((h) =>
+                h.addCode(
+                    TypeMoq.It.isValue('#%%\ntesting2'),
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(2)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -531,10 +525,8 @@ testing2`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue('testing0\n#%%\ntesting1'),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(0),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(0)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -544,16 +536,83 @@ testing2`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue('#%%\ntesting2'),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(3),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(3)
                 )
             )
             .returns(() => Promise.resolve(true))
             .verifiable(TypeMoq.Times.once());
 
         await codeWatcher.runAllCells();
+
+        // Verify function calls
+        activeInteractiveWindow.verifyAll();
+        document.verifyAll();
+    });
+
+    test('Test two command ordering correct ordering', async () => {
+        const fileName = Uri.file('test.py');
+        const version = 1;
+        const inputText = `#%%
+testing1
+#%%
+testing2
+#%%
+testing3`;
+        const document = createDocument(inputText, fileName.fsPath, version, TypeMoq.Times.atLeastOnce(), true);
+
+        codeWatcher.setDocument(document.object);
+
+        const expectedFuncOrder = [1, 2, 3, 1, 2, 3];
+        const funcOrder: number[] = [];
+
+        // Set up our expected calls to add code
+        activeInteractiveWindow
+            .setup((h) =>
+                h.addCode(
+                    TypeMoq.It.isValue('#%%\ntesting1'),
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(0)
+                )
+            )
+            .returns(() => {
+                funcOrder.push(1);
+                return Promise.resolve(true);
+            })
+            .verifiable(TypeMoq.Times.exactly(2));
+
+        activeInteractiveWindow
+            .setup((h) =>
+                h.addCode(
+                    TypeMoq.It.isValue('#%%\ntesting2'),
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(2)
+                )
+            )
+            .returns(() => {
+                funcOrder.push(2);
+                return Promise.resolve(true);
+            })
+            .verifiable(TypeMoq.Times.exactly(2));
+
+        activeInteractiveWindow
+            .setup((h) =>
+                h.addCode(
+                    TypeMoq.It.isValue('#%%\ntesting3'),
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(4)
+                )
+            )
+            .returns(() => {
+                funcOrder.push(3);
+                return Promise.resolve(true);
+            })
+            .verifiable(TypeMoq.Times.exactly(2));
+
+        codeWatcher.runAllCells().then(noop, noop);
+        await codeWatcher.runAllCells();
+
+        expect(funcOrder).deep.equals(expectedFuncOrder);
 
         // Verify function calls
         activeInteractiveWindow.verifyAll();
@@ -576,12 +635,8 @@ testing2`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue('#%%\ntesting2'),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(2),
-                    TypeMoq.It.is((ed: TextEditor) => {
-                        return textEditor.object === ed;
-                    }),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(2)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -621,10 +676,8 @@ testing3`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue(targetText1),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(2),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(2)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -634,10 +687,8 @@ testing3`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue(targetText2),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(4),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(4)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -676,10 +727,8 @@ testing2`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue(targetText1),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(1),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(1)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -689,10 +738,8 @@ testing2`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue(targetText2),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(3),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(3)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -726,10 +773,8 @@ testing1`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue(targetText),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(0),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(0)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -754,18 +799,12 @@ print('testing')`;
         codeWatcher.setDocument(document.object);
 
         // If adding empty lines nothing should be added and history should not be started
-        interactiveWindowProvider
-            .setup((h) => h.getOrCreate(TypeMoq.It.isAny()))
-            .returns(() => Promise.resolve(activeInteractiveWindow.object))
-            .verifiable(TypeMoq.Times.never());
         activeInteractiveWindow
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isAny(),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isAnyNumber(),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isAnyNumber()
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -802,10 +841,8 @@ testing3`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue(targetText),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(2),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(2)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -837,7 +874,7 @@ testing2`;
                     })
                 )
             )
-            .returns(() => Promise.resolve('testing2'));
+            .returns(() => 'testing2');
         helper.setup((h) => h.normalizeLines(TypeMoq.It.isAny())).returns((x: string) => Promise.resolve(x));
 
         // Set up our expected calls to add code
@@ -845,12 +882,8 @@ testing2`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue('testing2'),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(3),
-                    TypeMoq.It.is((ed: TextEditor) => {
-                        return textEditor.object === ed;
-                    }),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(3)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -886,7 +919,7 @@ testing2`;
                     })
                 )
             )
-            .returns(() => Promise.resolve('testing2'));
+            .returns(() => 'testing2');
         helper.setup((h) => h.normalizeLines(TypeMoq.It.isAny())).returns((x: string) => Promise.resolve(x));
 
         // Set up our expected calls to add code
@@ -894,12 +927,8 @@ testing2`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue('text arg'),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(3),
-                    TypeMoq.It.is((ed: TextEditor) => {
-                        return textEditor.object === ed;
-                    }),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(3)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -917,7 +946,7 @@ testing2`;
         document.verifyAll();
     });
 
-    test('Test the RunCellAndAdvance command with next cell', async () => {
+    test('Test runCurrentCellAndAdvance command with next cell', async () => {
         const fileName = Uri.file('test.py');
         const version = 1;
         const inputText = `#%%
@@ -933,12 +962,8 @@ testing2`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue('#%%\ntesting1'),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(0),
-                    TypeMoq.It.is((ed: TextEditor) => {
-                        return textEditor.object === ed;
-                    }),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(0)
                 )
             )
             .returns(() => Promise.resolve(true))
@@ -973,6 +998,58 @@ testing2`;
         document.verifyAll();
     });
 
+    test('Test runCurrentCellAndAdvance command does not advance when newCellOnRunLast is false', async () => {
+        const fileName = Uri.file('test.py');
+        const version = 1;
+        const inputText = `#%%
+testing1
+`;
+        const document = createDocument(inputText, fileName.fsPath, version, TypeMoq.Times.atLeastOnce(), true);
+
+        codeWatcher.setDocument(document.object);
+
+        // Set up our expected calls to add code
+        activeInteractiveWindow
+            .setup((h) =>
+                h.addCode(
+                    TypeMoq.It.isValue('#%%\ntesting1\n'),
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(0)
+                )
+            )
+            .returns(() => Promise.resolve(true))
+            .verifiable(TypeMoq.Times.once());
+
+        // For this test we need to set up a document selection point
+        const selection = new Selection(0, 0, 0, 0);
+        textEditor.setup((te) => te.selection).returns(() => selection);
+
+        // Apply setting we want to test
+        jupyterSettings.newCellOnRunLast = false;
+        let advanceToRangeCalled = false;
+
+        // Override the advanceToRange function called from within runCurrentCellAndAdvance to
+        // modify local variable advanceToRangeCalled, by testing that no modification happened,
+        // we ensure advanceToRange was never called
+        (codeWatcher as any).advanceToRange = (_targetRange: Range) => {
+            advanceToRangeCalled = true;
+        };
+        (codeWatcher as any).insertCell = () => {
+            advanceToRangeCalled = true;
+        };
+
+        await codeWatcher.runCurrentCellAndAdvance();
+
+        // Revert setting
+        jupyterSettings.newCellOnRunLast = true;
+        expect(advanceToRangeCalled).to.be.equal(false, 'advanceToRange should not have been set');
+
+        // Verify function calls
+        textEditor.verifyAll();
+        activeInteractiveWindow.verifyAll();
+        document.verifyAll();
+    });
+
     test('CodeLens returned after settings changed is different', () => {
         // Create our document
         const fileName = Uri.file('test.py');
@@ -993,7 +1070,6 @@ testing2`;
             commandManager.object,
             disposables,
             debugService.object,
-            fileSystem.object,
             instance(workspace)
         );
 
@@ -1047,27 +1123,23 @@ testing2`;
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue(targetText1),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(0),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(0)
                 )
             )
-            .returns(() => Promise.resolve(false))
+            .returns(() => Promise.reject(new InteractiveCellResultError(undefined as any)))
             .verifiable(TypeMoq.Times.once());
 
         activeInteractiveWindow
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue(targetText2),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(2),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(2)
                 )
             )
             .returns(() => Promise.resolve(true))
-            .verifiable(TypeMoq.Times.never());
+            .verifiable(TypeMoq.Times.once()); // Still called but not executed
 
         await codeWatcher.runAllCellsAbove(4, 0);
 
@@ -1092,27 +1164,23 @@ testing2`; // Command tests override getText, so just need the ranges here
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue('#%%\ntesting1'),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(0),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(0)
                 )
             )
-            .returns(() => Promise.resolve(false))
+            .returns(() => Promise.reject(new InteractiveCellResultError(undefined as any)))
             .verifiable(TypeMoq.Times.once());
 
         activeInteractiveWindow
             .setup((h) =>
                 h.addCode(
                     TypeMoq.It.isValue('#%%\ntesting2'),
-                    TypeMoq.It.isValue(fileName),
-                    TypeMoq.It.isValue(2),
-                    TypeMoq.It.isAny(),
-                    TypeMoq.It.isAny()
+                    TypeMoq.It.is((u) => u.fsPath == fileName.fsPath),
+                    TypeMoq.It.isValue(2)
                 )
             )
             .returns(() => Promise.resolve(true))
-            .verifiable(TypeMoq.Times.never());
+            .verifiable(TypeMoq.Times.once()); // Still called, but not executed
 
         await codeWatcher.runAllCells();
 

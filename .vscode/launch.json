@@ -8,7 +8,6 @@
             "request": "launch",
             "runtimeExecutable": "${execPath}",
             "args": ["--extensionDevelopmentPath=${workspaceFolder}", "--enable-proposed-api"],
-            "stopOnEntry": false,
             "smartStep": true,
             "sourceMaps": true,
             "outFiles": ["${workspaceFolder}/out/**/*", "!${workspaceFolder}/**/node_modules**/*"],
@@ -26,6 +25,31 @@
                 // Enable this to log debugger output. Directory must exist ahead of time
                 "XDEBUGPY_LOG_DIR": "${workspaceRoot}/tmp/Debug_Output_Ex"
             },
+            "presentation": {
+                "group": "1_extension",
+                "order": 1
+            }
+        },
+        {
+            "name": "Extension (web)",
+            "type": "pwa-extensionHost",
+            "debugWebWorkerHost": true,
+            "request": "launch",
+            "args": ["--extensionDevelopmentPath=${workspaceFolder}", "--extensionDevelopmentKind=web"],
+            "outFiles": ["${workspaceFolder}/out/**/*", "!${workspaceFolder}/**/node_modules**/*"],
+            "preLaunchTask": "Compile Web Extension",
+            "presentation": {
+                "group": "1_extension",
+                "order": 1
+            }
+        },
+        {
+            "name": "Extension (web with daemon compilation)",
+            "type": "pwa-extensionHost",
+            "debugWebWorkerHost": true,
+            "request": "launch",
+            "args": ["--extensionDevelopmentPath=${workspaceFolder}", "--extensionDevelopmentKind=web"],
+            "outFiles": ["${workspaceFolder}/out/**/*", "!${workspaceFolder}/**/node_modules**/*"],
             "presentation": {
                 "group": "1_extension",
                 "order": 1
@@ -37,7 +61,6 @@
             "request": "launch",
             "runtimeExecutable": "${execPath}",
             "args": ["--extensionDevelopmentPath=${workspaceFolder}", "--enable-proposed-api"],
-            "stopOnEntry": false,
             "smartStep": true,
             "sourceMaps": true,
             "outFiles": ["${workspaceFolder}/out/**/*", "!${workspaceFolder}/**/node_modules**/*"],
@@ -60,32 +83,11 @@
             }
         },
         {
-            "name": "Extension (UI in Browser)",
-            "type": "extensionHost",
-            "request": "launch",
-            "runtimeExecutable": "${execPath}",
-            "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
-            "stopOnEntry": false,
-            "smartStep": true,
-            "sourceMaps": true,
-            "outFiles": ["${workspaceFolder}/out/**/*", "!${workspaceFolder}/**/node_modules**/*"],
-            "preLaunchTask": "Inject DS WebBrowser UI",
-            "env": {
-                "VSC_JUPYTER_DS_UI_PROMPT": "1"
-            },
-            "skipFiles": ["<node_internals>/**"],
-            "presentation": {
-                "group": "1_extension",
-                "order": 2
-            }
-        },
-        {
             "name": "Extension inside container",
             "type": "extensionHost",
             "request": "launch",
             "runtimeExecutable": "${execPath}",
             "args": ["--extensionDevelopmentPath=${workspaceFolder}", "${workspaceFolder}/data"],
-            "stopOnEntry": false,
             "smartStep": true,
             "sourceMaps": true,
             "outFiles": ["${workspaceFolder}/out/**/*", "!${workspaceFolder}/**/node_modules**/*"],
@@ -96,6 +98,43 @@
             }
         },
         {
+            "name": "Web Tests",
+            "type": "extensionHost",
+            "debugWebWorkerHost": true,
+            "request": "launch",
+            "args": [
+                "${workspaceFolder}/src/test/datascience",
+                "--extensionDevelopmentPath=${workspaceFolder}",
+                "--enable-proposed-api",
+                "--extensionDevelopmentKind=web",
+                "--extensionTestsPath=${workspaceFolder}/out/extension.web.bundle"
+            ],
+            "outFiles": ["${workspaceFolder}/out/**/*.*"],
+            "sourceMaps": true,
+            "preLaunchTask": "Start Jupyter Server", // Update the env variables for this script in tasks.json with a remote URI to use your own
+            "postDebugTask": "Stop Jupyter Server",
+            "presentation": {
+                "group": "2_tests",
+                "order": 11
+            }
+        },
+        {
+            "name": "Web Tests (without debugging)",
+            "type": "node",
+            "program": "${workspaceFolder}/build/launchWebTest.js",
+            "request": "launch",
+            "outFiles": ["${workspaceFolder}/out/**/*.*"],
+            "sourceMaps": true,
+            "preLaunchTask": "compile-web-test",
+            "presentation": {
+                "group": "2_tests",
+                "order": 11
+            },
+            "env": {
+                "CI_PYTHON_PATH": "" // Update with path to real python interpereter used for testing.
+            }
+        },
+        {
             // Note, for the smoke test you want to debug, you may need to copy the file,
             // rename it and remove a check for only smoke tests.
             "name": "Smoke Tests (*.smoke.test.ts)",
@@ -103,17 +142,16 @@
             "request": "launch",
             "runtimeExecutable": "${execPath}",
             "args": [
-                "${workspaceFolder}/src/testMultiRootWkspc/smokeTests",
+                "${workspaceFolder}/src/test/testMultiRootWkspc/smokeTests",
                 "--enable-proposed-api",
                 "--extensionDevelopmentPath=${workspaceFolder}",
-                "--extensionTestsPath=${workspaceFolder}/out/test"
+                "--extensionTestsPath=${workspaceFolder}/out/test/index.node.js"
             ],
             "env": {
                 "CI_PYTHON_PATH": "<Python Path>",
                 "VSC_JUPYTER_SMOKE_TEST": "1",
                 "VSC_JUPYTER_CI_TEST_GREP": "Smoke Test"
             },
-            "stopOnEntry": false,
             "sourceMaps": true,
             "outFiles": ["${workspaceFolder}/out/**/*.js", "!${workspaceFolder}/**/node_modules**/*"],
             "preLaunchTask": "Compile",
@@ -121,6 +159,32 @@
             "presentation": {
                 "group": "2_tests",
                 "order": 10
+            }
+        },
+        {
+            "name": "Perf Tests (*.perf.test.ts)",
+            "type": "extensionHost",
+            "request": "launch",
+            "runtimeExecutable": "${execPath}",
+            "args": [
+                "${workspaceFolder}/src/test/testMultiRootWkspc/perfTests",
+                "--enable-proposed-api",
+                "--extensionDevelopmentPath=${workspaceFolder}",
+                "--extensionTestsPath=${workspaceFolder}/out/test/index.node.js"
+            ],
+            "env": {
+                "CI_PYTHON_PATH": "<Python Path>",
+                "VSC_JUPYTER_PERF_TEST": "1",
+                "TEST_FILES_SUFFIX": "notebookCellExecution.perf.test",
+                "VSC_JUPYTER_TEST_TIMEOUT": "60000"
+            },
+            "sourceMaps": true,
+            "outFiles": ["${workspaceFolder}/out/**/*.js", "!${workspaceFolder}/**/node_modules**/*"],
+            "preLaunchTask": "Compile",
+            "skipFiles": ["<node_internals>/**"],
+            "presentation": {
+                "group": "2_tests",
+                "order": 12
             }
         },
         {
@@ -137,7 +201,6 @@
             "env": {
                 "VSC_JUPYTER_CI_TEST_GREP": "Language Server:"
             },
-            "stopOnEntry": false,
             "sourceMaps": true,
             "outFiles": ["${workspaceFolder}/out/**/*.js", "!${workspaceFolder}/**/node_modules**/*"],
             "preLaunchTask": "preTestJediLSP",
@@ -148,39 +211,9 @@
             }
         },
         {
-            "name": "VS Code Tests (Jupyter+Python Extension installed, *.vscode.test.ts)",
-            "type": "extensionHost",
-            "request": "launch",
-            "runtimeExecutable": "${execPath}",
-            "args": [
-                "${workspaceFolder:vscode-jupyter}/src/test/datascience",
-                "--enable-proposed-api",
-                "--extensionDevelopmentPath=${workspaceFolder}",
-                "--extensionTestsPath=${workspaceFolder}/out/test"
-            ],
-            "env": {
-                "VSC_JUPYTER_CI_TEST_GREP": "", // Modify this to run a subset of the tests
-                "VSC_JUPYTER_CI_TEST_INVERT_GREP": "", // Initialize this to invert the grep (exclude tests with value defined in grep).
-                "CI_PYTHON_PATH": "<PythonPath>", // Update with path to real python interpereter used for testing.
-                "VSC_FORCE_REAL_JUPYTER": "true", // Enalbe tests that require Jupyter.
-                "VSC_JUPYTER_CI_RUN_NON_PYTHON_NB_TEST": "", // Initialize this to run tests again Julia & other kernels.
-                "VSC_JUPYTER_RUN_NB_TEST": "1", // Initialize this to run notebook tests (must be using VSC Insiders).
-                "VSC_JUPYTER_LOAD_EXPERIMENTS_FROM_FILE": "true",
-                "TEST_FILES_SUFFIX": "vscode.test",
-                "VSC_JUPYTER_EXPOSE_SVC": "1"
-            },
-            "stopOnEntry": false,
-            "sourceMaps": true,
-            "outFiles": ["${workspaceFolder}/out/**/*.js", "!${workspaceFolder}/**/node_modules**/*"],
-            "preLaunchTask": "Compile",
-            "skipFiles": ["<node_internals>/**"],
-            "presentation": {
-                "group": "2_tests",
-                "order": 5
-            }
-        },
-        {
-            "name": "Native Notebook Tests (Jupyter+Python Extension installed, *.vscode.test.ts)",
+            // Run this first: https://github.com/microsoft/vscode-jupyter/blob/main/src/test/datascience/setupTestEnvs.cmd
+            // Then specify either a grep below or mark a test as 'test.only' to run the test that's failing.
+            "name": "Tests (Jupyter+Python Extension installed, *.vscode.test.ts)",
             "type": "extensionHost",
             "request": "launch",
             "runtimeExecutable": "${execPath}",
@@ -188,25 +221,25 @@
                 "${workspaceFolder}/src/test/datascience",
                 "--enable-proposed-api",
                 "--extensionDevelopmentPath=${workspaceFolder}",
-                "--extensionTestsPath=${workspaceFolder}/out/test"
+                "--extensionTestsPath=${workspaceFolder}/out/test/index.node.js"
             ],
             "env": {
+                "VSC_JUPYTER_FORCE_LOGGING": "1",
                 "VSC_JUPYTER_CI_TEST_GREP": "", // Leave as `VSCode Notebook` to run only Notebook tests.
                 "VSC_JUPYTER_CI_TEST_INVERT_GREP": "", // Initialize this to invert the grep (exclude tests with value defined in grep).
                 "CI_PYTHON_PATH": "", // Update with path to real python interpereter used for testing.
-                "VSC_FORCE_REAL_JUPYTER": "true", // Enalbe tests that require Jupyter.
                 "VSC_JUPYTER_CI_RUN_NON_PYTHON_NB_TEST": "", // Initialize this to run tests again Julia & other kernels.
-                "VSC_JUPYTER_RUN_NB_TEST": "true", // Initialize this to run notebook tests (must be using VSC Insiders).
                 "VSC_JUPYTER_WEBVIEW_TEST_MIDDLEWARE": "true", // Initialize to create the webview test middleware
                 "VSC_JUPYTER_LOAD_EXPERIMENTS_FROM_FILE": "true",
-                "TEST_FILES_SUFFIX": "vscode.test",
+                // "TF_BUILD": "", // Set to anything to force full logging
+                "TEST_FILES_SUFFIX": "*.vscode.test,*.vscode.common.test",
                 "VSC_JUPYTER_REMOTE_NATIVE_TEST": "false", // Change to `true` to run the Native Notebook tests with remote jupyter connections.
                 "VSC_JUPYTER_NON_RAW_NATIVE_TEST": "false", // Change to `true` to run the Native Notebook tests with non-raw kernels (i.e. local jupyter server).
                 "XVSC_JUPYTER_INSTRUMENT_CODE_FOR_COVERAGE": "1",
                 "XVSC_JUPYTER_INSTRUMENT_CODE_FOR_COVERAGE_HTML": "1", //Enable to get full coverage repor (in coverage folder).
                 "VSC_JUPYTER_EXPOSE_SVC": "1"
+                // "VSC_JUPYTER_CI_IS_CONDA": "true" // Enable to run conda tests
             },
-            "stopOnEntry": false,
             "sourceMaps": true,
             "outFiles": ["${workspaceFolder}/out/**/*.js", "!${workspaceFolder}/**/node_modules**/*"],
             "preLaunchTask": "Compile",
@@ -221,10 +254,9 @@
             "type": "node",
             "request": "launch",
             "program": "${workspaceFolder}/node_modules/mocha/bin/_mocha",
-            "stopOnEntry": false,
             "sourceMaps": true,
             "args": [
-                "./out/test/**/*.unit.test.js",
+                "./out/**/*.unit.test.js",
                 "--require=out/test/unittests.js",
                 "--ui=tdd",
                 "--recursive",
@@ -243,84 +275,6 @@
                 // Remove 'X' prefix to run with coverage
                 "XVSC_JUPYTER_INSTRUMENT_CODE_FOR_COVERAGE": "1",
                 "XVSC_JUPYTER_INSTRUMENT_CODE_FOR_COVERAGE_HTML": "1" //Enable to get full coverage repor (in coverage folder).
-            }
-        },
-        {
-            "name": "Functional Tests (without VS Code, *.functional.test.ts)",
-            "type": "node",
-            "request": "launch",
-            "program": "${workspaceFolder}/node_modules/mocha/bin/_mocha",
-            "stopOnEntry": false,
-            "sourceMaps": true,
-            "args": [
-                "./out/test/**/*.functional.test.js",
-                "--require=out/test/functionalTests.js",
-                "--ui=tdd",
-                "--recursive",
-                "--colors",
-                // "--grep", "<suite>",
-                "--timeout=300000",
-                "--exit"
-            ],
-            "env": {
-                // Remove `X` prefix to test with real browser to host DS ui (for DS functional tests).
-                "XVSC_JUPYTER_DS_UI_BROWSER": "1",
-                // Remove `X` prefix to test with real python (for DS functional tests).
-                "XVSC_FORCE_REAL_JUPYTER": "1",
-                // Remove 'X' to turn on all logging in the debug output
-                "XVSC_JUPYTER_FORCE_LOGGING": "1",
-                // Remove `X` prefix and update path to test with real python interpreter (for DS functional tests).
-                "XCI_PYTHON_PATH": "<Python Path>",
-                // Remove 'X' and initialize with second Python interpreter to be used for fucntional tests.
-                // Some tests require multiple python interpreters (do not rely on discovery for functional tests, be explicit).
-                "XCI_PYTHON_PATH2": "<Python Path>",
-                // Remove 'X' prefix to dump output for debugger. Directory has to exist prior to launch
-                "XDEBUGPY_LOG_DIR": "${workspaceRoot}/tmp/Debug_Output",
-                // Remove 'X' prefix to dump webview redux action log
-                "XVSC_JUPYTER_WEBVIEW_LOG_FILE": "${workspaceRoot}/test-webview.log",
-                // Remove 'X' prefix to run with coverage
-                "XVSC_JUPYTER_INSTRUMENT_CODE_FOR_COVERAGE": "1"
-            },
-            "outFiles": ["${workspaceFolder}/out/**/*.js", "!${workspaceFolder}/**/node_modules**/*"],
-            "preLaunchTask": "Compile",
-            "skipFiles": ["<node_internals>/**"],
-            "presentation": {
-                "group": "2_tests",
-                "order": 8
-            }
-        },
-        {
-            "name": "Functional DS UI Tests (without VS Code, *.ui.functional.test.ts)",
-            "type": "node",
-            "request": "launch",
-            "program": "${workspaceFolder}/node_modules/mocha/bin/_mocha",
-            "stopOnEntry": false,
-            "sourceMaps": true,
-            "args": [
-                "./out/test/**/*.ui.functional.test.js",
-                "--require=out/test/functionalTests.js",
-                "--ui=tdd",
-                "--recursive",
-                "--colors",
-                //"--grep", "<suite>",
-                "--timeout=300000"
-            ],
-            "env": {
-                // Remove `X` prefix to test with real browser to host DS ui (for DS functional tests).
-                "XVSC_JUPYTER_DS_UI_BROWSER": "1",
-                // Remove `X` prefix to test with real python (for DS functional tests).
-                "XVSC_FORCE_REAL_JUPYTER": "1",
-                // Remove 'X' to turn on all logging in the debug output
-                "XVSC_JUPYTER_FORCE_LOGGING": "1",
-                // Remove `X` prefix and update path to test with real python interpreter (for DS functional tests).
-                "XCI_PYTHON_PATH": "<Python Path>"
-            },
-            "outFiles": ["${workspaceFolder}/out/**/*.js", "!${workspaceFolder}/**/node_modules**/*"],
-            "preLaunchTask": "Compile",
-            "skipFiles": ["<node_internals>/**"],
-            "presentation": {
-                "group": "2_tests",
-                "order": 9
             }
         },
         {

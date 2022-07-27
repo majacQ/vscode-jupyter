@@ -5,22 +5,19 @@
 
 /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
 import { assert, expect } from 'chai';
-import * as path from 'path';
 import * as sinon from 'sinon';
-import { NotebookCell, Uri } from 'vscode';
-import { IVSCodeNotebook } from '../../../client/common/application/types';
-import { PYTHON_LANGUAGE } from '../../../client/common/constants';
-import { traceInfo } from '../../../client/common/logger';
-import { IDisposable } from '../../../client/common/types';
-import { IExtensionTestApi, waitForCondition } from '../../common';
-import { IS_REMOTE_NATIVE_TEST } from '../../constants';
-import { closeActiveWindows, EXTENSION_ROOT_DIR_FOR_TESTS, initialize } from '../../initialize';
-import { openNotebook } from '../helpers';
+import { NotebookCell, NotebookDocument, Uri } from 'vscode';
+import { PYTHON_LANGUAGE } from '../../../platform/common/constants';
+import { traceInfo } from '../../../platform/logging';
+import { IDisposable } from '../../../platform/common/types';
+import { waitForCondition } from '../../common.node';
+import { IS_REMOTE_NATIVE_TEST } from '../../constants.node';
+import { closeActiveWindows } from '../../initialize.node';
+import { openNotebook } from '../helpers.node';
 import {
     assertHasTextOutputInVSCode,
     assertVSCCellHasErrorOutput,
     assertVSCCellStateIsUndefinedOrIdle,
-    canRunNotebookTests,
     closeNotebooks,
     closeNotebooksAndCleanUpAfterTests,
     createTemporaryNotebook,
@@ -30,36 +27,26 @@ import {
     waitForExecutionCompletedSuccessfully,
     waitForExecutionCompletedWithErrors,
     waitForKernelToGetAutoSelected
-} from './helper';
+} from './helper.node';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import cloneDeep = require('lodash/cloneDeep');
 
 /* eslint-disable @typescript-eslint/no-explicit-any, no-invalid-this */
 suite('DataScience - VSCode Notebook - (Saving) (slow)', function () {
     this.timeout(60_000);
-    let api: IExtensionTestApi;
     const disposables: IDisposable[] = [];
-    let vscodeNotebook: IVSCodeNotebook;
-    const templateIPynbEmpty = path.join(
-        EXTENSION_ROOT_DIR_FOR_TESTS,
-        'src',
-        'test',
-        'datascience',
-        'notebook',
-        'empty.ipynb'
-    );
     let testEmptyIPynb: Uri;
     suiteSetup(async function () {
-        api = await initialize();
-        if (IS_REMOTE_NATIVE_TEST || !(await canRunNotebookTests())) {
+        if (IS_REMOTE_NATIVE_TEST()) {
             return this.skip();
         }
-        vscodeNotebook = api.serviceContainer.get<IVSCodeNotebook>(IVSCodeNotebook);
     });
     setup(async function () {
         traceInfo(`Start Test ${this.currentTest?.title}`);
         sinon.restore();
         // Don't use same file (due to dirty handling, we might save in dirty.)
         // Coz we won't save to file, hence extension will backup in dirty file and when u re-open it will open from dirty.
-        testEmptyIPynb = Uri.file(await createTemporaryNotebook(templateIPynbEmpty, disposables));
+        testEmptyIPynb = await createTemporaryNotebook([], disposables);
         traceInfo(`Start Test (completed) ${this.currentTest?.title}`);
     });
     teardown(async function () {
@@ -69,7 +56,7 @@ suite('DataScience - VSCode Notebook - (Saving) (slow)', function () {
     });
     suiteTeardown(closeNotebooksAndCleanUpAfterTests);
     test('Verify output & metadata when re-opening (slow)', async () => {
-        await openNotebook(testEmptyIPynb.fsPath);
+        const { notebook, editor } = await openNotebook(testEmptyIPynb);
 
         await insertCodeCell('print(1)', { index: 0 });
         await insertCodeCell('print(a)', { index: 1 });
@@ -80,15 +67,15 @@ suite('DataScience - VSCode Notebook - (Saving) (slow)', function () {
         let cell3: NotebookCell;
         let cell4: NotebookCell;
 
-        function initializeCells() {
-            cell1 = vscodeNotebook.activeNotebookEditor?.document.cellAt(0)!;
-            cell2 = vscodeNotebook.activeNotebookEditor?.document.getCells()![1]!;
-            cell3 = vscodeNotebook.activeNotebookEditor?.document.getCells()![2]!;
-            cell4 = vscodeNotebook.activeNotebookEditor?.document.getCells()![3]!;
+        function initializeCells(n: NotebookDocument) {
+            cell1 = n.cellAt(0)!;
+            cell2 = n.getCells()![1]!;
+            cell3 = n.getCells()![2]!;
+            cell4 = n.getCells()![3]!;
         }
-        initializeCells();
-        await waitForKernelToGetAutoSelected(PYTHON_LANGUAGE);
-        await runAllCellsInActiveNotebook();
+        initializeCells(notebook);
+        await waitForKernelToGetAutoSelected(editor, PYTHON_LANGUAGE);
+        await runAllCellsInActiveNotebook(false, editor);
         // Wait till 1 & 2 finish & 3rd cell starts executing.
         await waitForExecutionCompletedSuccessfully(cell1!);
         await waitForExecutionCompletedWithErrors(cell2!);
@@ -97,8 +84,14 @@ suite('DataScience - VSCode Notebook - (Saving) (slow)', function () {
             15_000,
             'Cells did not finish executing'
         );
+        const notebookMetadata = cloneDeep(notebook.metadata);
+        assert.strictEqual(
+            notebookMetadata.custom.metadata.language_info.name,
+            'python',
+            `Language not set correctly.`
+        );
 
-        function verifyCelMetadata() {
+        function verifyCellMetadata() {
             assert.lengthOf(cell1.outputs, 1, 'Incorrect output for cell 1');
             assert.lengthOf(cell2.outputs, 1, 'Incorrect output for cell 2');
             assert.lengthOf(cell3.outputs, 0, 'Incorrect output for cell 3'); // stream and interrupt error.
@@ -116,15 +109,16 @@ suite('DataScience - VSCode Notebook - (Saving) (slow)', function () {
             assert.isUndefined(cell4.executionSummary?.executionOrder, 'Execution count must be undefined for cell 4');
         }
 
-        verifyCelMetadata();
+        verifyCellMetadata();
 
         // Save and close this nb.
         await saveActiveNotebook();
         await closeActiveWindows();
 
         // Reopen the notebook & validate the metadata.
-        await openNotebook(testEmptyIPynb.fsPath);
-        initializeCells();
-        verifyCelMetadata();
+        const secondNotebook = await openNotebook(testEmptyIPynb);
+        initializeCells(secondNotebook.notebook);
+        verifyCellMetadata();
+        assert.deepEqual(notebookMetadata, secondNotebook.notebook.metadata);
     });
 });

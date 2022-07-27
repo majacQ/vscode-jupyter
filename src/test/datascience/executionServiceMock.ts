@@ -3,30 +3,30 @@
 'use strict';
 import { SemVer } from 'semver';
 
-import { ErrorUtils } from '../../client/common/errors/errorUtils';
-import { ModuleNotInstalledError } from '../../client/common/errors/moduleNotInstalledError';
-import { BufferDecoder } from '../../client/common/process/decoder';
-import { ProcessService } from '../../client/common/process/proc';
+import { ErrorUtils } from '../../platform/errors/errorUtils';
+import { ModuleNotInstalledError } from '../../platform/errors/moduleNotInstalledError';
+import { ProcessService } from '../../platform/common/process/proc.node';
 import {
     ExecutionResult,
     IPythonExecutionService,
     ObservableExecutionResult,
     SpawnOptions
-} from '../../client/common/process/types';
-import { buildPythonExecInfo } from '../../client/pythonEnvironments/exec';
-import { InterpreterInformation } from '../../client/pythonEnvironments/info';
+} from '../../platform/common/process/types.node';
+import { buildPythonExecInfo } from '../../platform/pythonEnvironments/exec';
+import { InterpreterInformation } from '../../platform/pythonEnvironments/info';
+import { Uri } from 'vscode';
 
 export class MockPythonExecutionService implements IPythonExecutionService {
     private procService: ProcessService;
     private pythonPath: string = 'python';
 
     constructor() {
-        this.procService = new ProcessService(new BufferDecoder());
+        this.procService = new ProcessService();
     }
 
     public getInterpreterInformation(): Promise<InterpreterInformation> {
         return Promise.resolve({
-            path: '',
+            uri: Uri.file(''),
             version: new SemVer('3.6.0-beta'),
             sysVersion: '1.0',
             sysPrefix: '1.0'

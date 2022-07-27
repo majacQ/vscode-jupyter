@@ -6,10 +6,11 @@
 import { assert } from 'chai';
 import { anything, instance, mock, when } from 'ts-mockito';
 import { EventEmitter, Memento } from 'vscode';
-import { JupyterInterpreterService } from '../../../../client/datascience/jupyter/interpreter/jupyterInterpreterService';
-import { JupyterInterpreterStateStore } from '../../../../client/datascience/jupyter/interpreter/jupyterInterpreterStateStore';
-import { PythonEnvironment } from '../../../../client/pythonEnvironments/info';
+import { PythonEnvironment } from '../../../../platform/pythonEnvironments/info';
+import { JupyterInterpreterService } from '../../../../kernels/jupyter/interpreter/jupyterInterpreterService.node';
+import { JupyterInterpreterStateStore } from '../../../../kernels/jupyter/interpreter/jupyterInterpreterStateStore.node';
 import { MockMemento } from '../../../mocks/mementos';
+import { arePathsSame } from '../../../../platform/common/platform/fileUtils';
 
 suite('DataScience - Jupyter Interpreter State', () => {
     let selected: JupyterInterpreterStateStore;
@@ -26,19 +27,21 @@ suite('DataScience - Jupyter Interpreter State', () => {
         selected = new JupyterInterpreterStateStore(instance(memento));
     });
 
-    test('Interpeter should not be set for fresh installs', async () => {
+    test('Interpreter should not be set for fresh installs', async () => {
         when(memento.get(anything(), false)).thenReturn(false);
 
         assert.isFalse(selected.interpreterSetAtleastOnce);
     });
     test('If memento is set (for subsequent sesssions), return true', async () => {
-        when(memento.get<string | undefined>(anything(), undefined)).thenReturn('jupyter.exe');
+        const uri = 'jupyter.exe';
+        when(memento.get<string | undefined>(anything(), undefined)).thenReturn(uri);
 
         assert.isOk(selected.interpreterSetAtleastOnce);
     });
     test('Get python path from memento', async () => {
-        when(memento.get<string | undefined>(anything(), undefined)).thenReturn('jupyter.exe');
+        const uri = 'jupyter.exe';
+        when(memento.get<string | undefined>(anything(), undefined)).thenReturn(uri);
 
-        assert.equal(selected.selectedPythonPath, 'jupyter.exe');
+        assert.isTrue(arePathsSame(selected.selectedPythonPath!.fsPath, uri));
     });
 });

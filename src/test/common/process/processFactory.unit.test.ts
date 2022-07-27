@@ -4,28 +4,25 @@
 import { expect } from 'chai';
 import { instance, mock, verify, when } from 'ts-mockito';
 import { Disposable, Uri } from 'vscode';
-import { IWorkspaceService } from '../../../client/common/application/types';
+import { IWorkspaceService } from '../../../platform/common/application/types';
 
-import { BufferDecoder } from '../../../client/common/process/decoder';
-import { ProcessLogger } from '../../../client/common/process/logger';
-import { ProcessService } from '../../../client/common/process/proc';
-import { ProcessServiceFactory } from '../../../client/common/process/processFactory';
-import { IBufferDecoder, IProcessLogger } from '../../../client/common/process/types';
-import { IDisposableRegistry } from '../../../client/common/types';
-import { EnvironmentVariablesProvider } from '../../../client/common/variables/environmentVariablesProvider';
-import { IEnvironmentVariablesProvider } from '../../../client/common/variables/types';
+import { ProcessLogger } from '../../../platform/common/process/logger.node';
+import { ProcessService } from '../../../platform/common/process/proc.node';
+import { ProcessServiceFactory } from '../../../platform/common/process/processFactory.node';
+import { IProcessLogger } from '../../../platform/common/process/types.node';
+import { IDisposableRegistry } from '../../../platform/common/types';
+import { CustomEnvironmentVariablesProvider } from '../../../platform/common/variables/customEnvironmentVariablesProvider.node';
+import { ICustomEnvironmentVariablesProvider } from '../../../platform/common/variables/types';
 
 suite('Process - ProcessServiceFactory', () => {
     let factory: ProcessServiceFactory;
-    let envVariablesProvider: IEnvironmentVariablesProvider;
-    let bufferDecoder: IBufferDecoder;
+    let envVariablesProvider: ICustomEnvironmentVariablesProvider;
     let processLogger: IProcessLogger;
     let processService: ProcessService;
     let disposableRegistry: IDisposableRegistry;
 
     setup(() => {
-        bufferDecoder = mock(BufferDecoder);
-        envVariablesProvider = mock(EnvironmentVariablesProvider);
+        envVariablesProvider = mock(CustomEnvironmentVariablesProvider);
         processLogger = mock(ProcessLogger);
         when(processLogger.logProcess('', [], {})).thenReturn();
         processService = mock(ProcessService);
@@ -40,7 +37,6 @@ suite('Process - ProcessServiceFactory', () => {
         factory = new ProcessServiceFactory(
             instance(envVariablesProvider),
             instance(processLogger),
-            instance(bufferDecoder),
             disposableRegistry,
             instance(workspace)
         );
@@ -52,10 +48,10 @@ suite('Process - ProcessServiceFactory', () => {
 
     [Uri.parse('test'), undefined].forEach((resource) => {
         test(`Ensure ProcessService is created with an ${resource ? 'existing' : 'undefined'} resource`, async () => {
-            when(envVariablesProvider.getEnvironmentVariables(resource)).thenResolve({ x: 'test' });
+            when(envVariablesProvider.getEnvironmentVariables(resource, 'RunNonPythonCode')).thenResolve({ x: 'test' });
 
             const proc = await factory.create(resource);
-            verify(envVariablesProvider.getEnvironmentVariables(resource)).once();
+            verify(envVariablesProvider.getEnvironmentVariables(resource, 'RunNonPythonCode')).once();
 
             const disposables = disposableRegistry as Disposable[];
             expect(disposables.length).equal(1);

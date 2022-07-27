@@ -5,27 +5,29 @@
 
 import { assert } from 'chai';
 import { workspace, Disposable } from 'vscode';
-import { traceInfo } from '../../client/common/logger';
-import { IInteractiveWindowProvider } from '../../client/datascience/types';
-import { initialize, IS_REMOTE_NATIVE_TEST } from '../initialize';
-import { submitFromPythonFile } from './helpers';
+import { IInteractiveWindowProvider } from '../../interactive-window/types';
+import { traceInfo } from '../../platform/logging';
+import { initialize, IS_REMOTE_NATIVE_TEST } from '../initialize.node';
+import { submitFromPythonFile } from './helpers.node';
 import {
-    assertHasTextOutputInVSCode,
     closeNotebooksAndCleanUpAfterTests,
     startJupyterServer,
-    waitForExecutionCompletedSuccessfully
-} from './notebook/helper';
+    waitForExecutionCompletedSuccessfully,
+    waitForTextOutput
+} from './notebook/helper.node';
 
 suite('Interactive window (remote)', async () => {
     let interactiveWindowProvider: IInteractiveWindowProvider;
     let disposables: Disposable[] = [];
     setup(async function () {
-        if (!IS_REMOTE_NATIVE_TEST) {
+        if (!IS_REMOTE_NATIVE_TEST()) {
             return this.skip();
         }
+        traceInfo(`Start Test ${this.currentTest?.title}`);
         const api = await initialize();
         interactiveWindowProvider = api.serviceContainer.get<IInteractiveWindowProvider>(IInteractiveWindowProvider);
         await startJupyterServer();
+        traceInfo(`Start Test (completed) ${this.currentTest?.title}`);
     });
     teardown(async function () {
         traceInfo(`Ended Test ${this.currentTest?.title}`);
@@ -54,6 +56,6 @@ suite('Interactive window (remote)', async () => {
 
         const secondCell = notebookDocument?.cellAt(1);
         await waitForExecutionCompletedSuccessfully(secondCell!);
-        assertHasTextOutputInVSCode(secondCell!, 'Hello World');
+        await waitForTextOutput(secondCell!, 'Hello World');
     });
 });

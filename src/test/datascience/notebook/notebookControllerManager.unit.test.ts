@@ -3,22 +3,25 @@
 
 import { assert } from 'chai';
 import { when, instance, mock } from 'ts-mockito';
-import { getDisplayNameOrNameOfKernelConnection } from '../../../client/datascience/jupyter/kernels/helpers';
-import { IJupyterKernelSpec } from '../../../client/datascience/types';
-import { EnvironmentType, PythonEnvironment } from '../../../client/pythonEnvironments/info';
+import { Uri } from 'vscode';
+import { getDisplayNameOrNameOfKernelConnection } from '../../../kernels/helpers';
+import { IJupyterKernelSpec } from '../../../kernels/types';
+import { EnvironmentType, PythonEnvironment } from '../../../platform/pythonEnvironments/info';
 
 suite('Notebook Controller Manager', () => {
     test('Live kernels should display the name`', () => {
         const name = getDisplayNameOrNameOfKernelConnection({
             id: '',
-            kind: 'connectToLiveKernel',
+            kind: 'connectToLiveRemoteKernel',
             interpreter: undefined,
             kernelModel: {
                 model: undefined,
                 lastActivityTime: new Date(),
                 name: 'livexyz',
                 numberOfConnections: 1
-            }
+            },
+            baseUrl: '',
+            serverId: ''
         });
 
         assert.strictEqual(name, 'livexyz');
@@ -27,12 +30,12 @@ suite('Notebook Controller Manager', () => {
         test('Display the name if language is not specified', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path'
+                    executable: 'path'
                 }
             });
 
@@ -41,12 +44,12 @@ suite('Notebook Controller Manager', () => {
         test('Display the name if language is not python', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'abc'
                 }
             });
@@ -56,15 +59,15 @@ suite('Notebook Controller Manager', () => {
         test('Display the name even if kernel is inside an unknown Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path'
+                    executable: 'path'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix'
                 }
             });
@@ -73,15 +76,15 @@ suite('Notebook Controller Manager', () => {
         test('Display name even if kernel is inside a global Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path'
+                    executable: 'path'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envType: EnvironmentType.Global
                 }
@@ -91,15 +94,15 @@ suite('Notebook Controller Manager', () => {
         test('Display name if kernel is inside a non-global Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path'
+                    executable: 'path'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '',
                     displayName: 'Something',
@@ -111,15 +114,15 @@ suite('Notebook Controller Manager', () => {
         test('Display name if kernel is inside a non-global 64bit Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path'
+                    executable: 'path'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '',
                     displayName: 'Something 64-bit',
@@ -131,15 +134,15 @@ suite('Notebook Controller Manager', () => {
         test('Prefixed with `<env name>` kernel is inside a non-global Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path'
+                    executable: 'path'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '.env',
                     displayName: 'Something',
@@ -151,15 +154,15 @@ suite('Notebook Controller Manager', () => {
         test('Prefixed with `<env name>` kernel is inside a non-global 64-bit Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path'
+                    executable: 'path'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '.env',
                     displayName: 'Something 64-bit',
@@ -173,12 +176,12 @@ suite('Notebook Controller Manager', () => {
         test('Display name if language is python', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 }
             });
@@ -188,16 +191,16 @@ suite('Notebook Controller Manager', () => {
         test('Display name even if kernel is associated an unknown Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '.env',
                     displayName: 'Something 64-bit'
@@ -208,16 +211,16 @@ suite('Notebook Controller Manager', () => {
         test('Display name even if kernel is associated with a global Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '.env',
                     displayName: 'Something 64-bit',
@@ -229,16 +232,16 @@ suite('Notebook Controller Manager', () => {
         test('Display name if kernel is associated with a non-global Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '',
                     version: undefined,
@@ -251,16 +254,16 @@ suite('Notebook Controller Manager', () => {
         test('Display name if kernel is associated with a non-global 64bit Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '',
                     displayName: 'Something 64-bit',
@@ -272,16 +275,16 @@ suite('Notebook Controller Manager', () => {
         test('Display name if kernel is associated with a non-global 64bit Python environment and includes version', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '',
                     displayName: 'Something 64-bit',
@@ -301,16 +304,16 @@ suite('Notebook Controller Manager', () => {
         test('Prefixed with `<env name>` kernel is associated with a non-global Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '.env',
                     displayName: 'Something 64-bit',
@@ -330,16 +333,16 @@ suite('Notebook Controller Manager', () => {
         test('Prefixed with `<env name>` kernel is associated with a non-global 64-bit Python environment', () => {
             const name = getDisplayNameOrNameOfKernelConnection({
                 id: '',
-                kind: 'startUsingKernelSpec',
+                kind: 'startUsingLocalKernelSpec',
                 kernelSpec: {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '.env',
                     displayName: 'Something 64-bit',
@@ -366,11 +369,11 @@ suite('Notebook Controller Manager', () => {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '',
                     displayName: 'Something 64-bit'
@@ -386,11 +389,11 @@ suite('Notebook Controller Manager', () => {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '',
                     displayName: 'Something 64-bit',
@@ -407,11 +410,11 @@ suite('Notebook Controller Manager', () => {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '',
                     displayName: 'Something',
@@ -428,11 +431,11 @@ suite('Notebook Controller Manager', () => {
                     argv: [],
                     display_name: 'kspecname',
                     name: 'kspec',
-                    path: 'path',
+                    executable: 'path',
                     language: 'python'
                 },
                 interpreter: {
-                    path: 'pyPath',
+                    uri: Uri.file('pyPath'),
                     sysPrefix: 'sysPrefix',
                     envName: '',
                     displayName: 'Something 64-bit',

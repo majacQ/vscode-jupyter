@@ -4,11 +4,11 @@
 import type * as nbformat from '@jupyterlab/nbformat';
 import { Kernel, KernelMessage } from '@jupyterlab/services';
 import { CancellationToken } from 'vscode-jsonrpc';
+import { ICell } from '../../platform/common/types';
+import { concatMultilineString } from '../../platform/common/utils';
 
-import { createDeferred, Deferred } from '../../client/common/utils/async';
-import { noop } from '../../client/common/utils/misc';
-import { ICell } from '../../client/datascience/types';
-import { concatMultilineString } from '../../datascience-ui/common';
+import { createDeferred, Deferred } from '../../platform/common/utils/async';
+import { noop, swallowExceptions } from '../../platform/common/utils/misc';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 interface IMessageResult {
@@ -138,7 +138,7 @@ class OutputMessageProducer extends SimpleMessageProducer {
         this.cancelToken = cancelToken;
     }
 
-    public async produceNextMessage(): Promise<IMessageResult> {
+    public override async produceNextMessage(): Promise<IMessageResult> {
         // Special case the 'generator' cell that returns a function
         // to generate output.
         if (this.output.output_type === 'generator') {
@@ -179,7 +179,7 @@ class OutputMessageProducer extends SimpleMessageProducer {
         return super.produceNextMessage();
     }
 
-    public receiveInput(value: string) {
+    public override receiveInput(value: string) {
         if (this.waitingForInput) {
             this.waitingForInput.resolve(value);
         }
@@ -231,7 +231,7 @@ export class MockJupyterRequestICell implements Kernel.IFuture<any, any> {
                 version: '1.1',
                 session: '1111111111',
                 msg_id: '1.1',
-                msg_type: ('shell' as any) as KernelMessage.ShellMessageType,
+                msg_type: 'shell' as any as KernelMessage.ShellMessageType,
                 date: ''
             },
             parent_header: {},
@@ -307,9 +307,9 @@ export class MockJupyterRequestICell implements Kernel.IFuture<any, any> {
                     .then((r) => {
                         // If there's a message, send it.
                         if (r.message && r.message.channel === 'iopub' && this.onIOPub) {
-                            void this.onIOPub(r.message as KernelMessage.IIOPubMessage);
+                            swallowExceptions(() => this.onIOPub(r.message as KernelMessage.IIOPubMessage));
                         } else if (r.message && r.message.channel === 'stdin' && this.onStdin) {
-                            void this.onStdin(r.message as KernelMessage.IStdinMessage);
+                            swallowExceptions(() => this.onStdin(r.message as KernelMessage.IStdinMessage));
                         }
 
                         // Move onto the next producer if allowed
@@ -334,7 +334,7 @@ export class MockJupyterRequestICell implements Kernel.IFuture<any, any> {
             replyProducer
                 .produceNextMessage()
                 .then((r) => {
-                    void this.onReply((<any>r.message) as KernelMessage.IShellMessage);
+                    swallowExceptions(() => this.onReply((<any>r.message) as KernelMessage.IShellMessage));
                 })
                 .ignoreErrors();
 
@@ -377,7 +377,7 @@ export class MockJupyterRequest implements Kernel.IFuture<any, any> {
                 version: '1.1',
                 session: '1111111111',
                 msg_id: '1.1',
-                msg_type: ('shell' as any) as KernelMessage.ShellMessageType,
+                msg_type: 'shell' as any as KernelMessage.ShellMessageType,
                 date: ''
             },
             parent_header: {},
@@ -453,9 +453,9 @@ export class MockJupyterRequest implements Kernel.IFuture<any, any> {
                     .then((r) => {
                         // If there's a message, send it.
                         if (r.message && r.message.channel === 'iopub' && this.onIOPub) {
-                            void this.onIOPub(r.message as KernelMessage.IIOPubMessage);
+                            swallowExceptions(() => this.onIOPub(r.message as KernelMessage.IIOPubMessage));
                         } else if (r.message && r.message.channel === 'stdin' && this.onStdin) {
-                            void this.onStdin(r.message as KernelMessage.IStdinMessage);
+                            swallowExceptions(() => this.onStdin(r.message as KernelMessage.IStdinMessage));
                         }
 
                         // Move onto the next producer if allowed
@@ -480,7 +480,7 @@ export class MockJupyterRequest implements Kernel.IFuture<any, any> {
             replyProducer
                 .produceNextMessage()
                 .then((r) => {
-                    void this.onReply((<any>r.message) as KernelMessage.IShellMessage);
+                    swallowExceptions(() => this.onReply((<any>r.message) as KernelMessage.IShellMessage));
                 })
                 .ignoreErrors();
 

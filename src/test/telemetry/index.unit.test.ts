@@ -9,21 +9,27 @@ import * as TypeMoq from 'typemoq';
 
 import { instance, mock, verify, when } from 'ts-mockito';
 import { WorkspaceConfiguration } from 'vscode';
-import { IWorkspaceService } from '../../client/common/application/types';
-import { WorkspaceService } from '../../client/common/application/workspace';
-import { EXTENSION_ROOT_DIR } from '../../client/constants';
+import { IWorkspaceService } from '../../platform/common/application/types';
+import { WorkspaceService } from '../../platform/common/application/workspace.node';
+import { EXTENSION_ROOT_DIR } from '../../platform/constants.node';
 import {
     _resetSharedProperties,
     clearTelemetryReporter,
     isTelemetryDisabled,
     sendTelemetryEvent,
     setSharedProperty
-} from '../../client/telemetry';
+} from '../../telemetry';
+import {
+    isUnitTestExecution,
+    isTestExecution,
+    setTestExecution,
+    setUnitTestExecution
+} from '../../platform/common/constants';
 
 suite('Telemetry', () => {
     let workspaceService: IWorkspaceService;
-    const oldValueOfVSC_JUPYTER_UNIT_TEST = process.env.VSC_JUPYTER_UNIT_TEST;
-    const oldValueOfVSC_JUPYTER_CI_TEST = process.env.VSC_JUPYTER_CI_TEST;
+    const oldValueOfVSC_JUPYTER_UNIT_TEST = isUnitTestExecution();
+    const oldValueOfVSC_JUPYTER_CI_TEST = isTestExecution();
 
     class Reporter {
         public static eventName: string[] = [];
@@ -49,14 +55,14 @@ suite('Telemetry', () => {
 
     setup(() => {
         workspaceService = mock(WorkspaceService);
-        process.env.VSC_JUPYTER_UNIT_TEST = undefined;
-        process.env.VSC_JUPYTER_CI_TEST = undefined;
+        setTestExecution(false);
+        setUnitTestExecution(false);
         clearTelemetryReporter();
         Reporter.clear();
     });
     teardown(() => {
-        process.env.VSC_JUPYTER_UNIT_TEST = oldValueOfVSC_JUPYTER_UNIT_TEST;
-        process.env.VSC_JUPYTER_CI_TEST = oldValueOfVSC_JUPYTER_CI_TEST;
+        setUnitTestExecution(oldValueOfVSC_JUPYTER_UNIT_TEST);
+        setTestExecution(oldValueOfVSC_JUPYTER_CI_TEST);
         rewiremock.disable();
         _resetSharedProperties();
     });
@@ -94,7 +100,7 @@ suite('Telemetry', () => {
 
     test('Send Telemetry', () => {
         rewiremock.enable();
-        rewiremock('vscode-extension-telemetry').with({ default: Reporter });
+        rewiremock('@vscode/extension-telemetry').with({ default: Reporter });
 
         const eventName = 'Testing';
         const properties = { hello: 'world', foo: 'bar' };
@@ -109,7 +115,7 @@ suite('Telemetry', () => {
     });
     test('Send Telemetry with no properties', () => {
         rewiremock.enable();
-        rewiremock('vscode-extension-telemetry').with({ default: Reporter });
+        rewiremock('@vscode/extension-telemetry').with({ default: Reporter });
 
         const eventName = 'Testing';
 
@@ -121,7 +127,7 @@ suite('Telemetry', () => {
     });
     test('Send Telemetry with shared properties', () => {
         rewiremock.enable();
-        rewiremock('vscode-extension-telemetry').with({ default: Reporter });
+        rewiremock('@vscode/extension-telemetry').with({ default: Reporter });
 
         const eventName = 'Testing';
         const properties = { hello: 'world', foo: 'bar' };
@@ -139,7 +145,7 @@ suite('Telemetry', () => {
     });
     test('Shared properties will replace existing ones', () => {
         rewiremock.enable();
-        rewiremock('vscode-extension-telemetry').with({ default: Reporter });
+        rewiremock('@vscode/extension-telemetry').with({ default: Reporter });
 
         const eventName = 'Testing';
         const properties = { hello: 'world', foo: 'bar' };
@@ -158,7 +164,7 @@ suite('Telemetry', () => {
     test('Send Error Telemetry', () => {
         rewiremock.enable();
         const error = new Error('Boo');
-        rewiremock('vscode-extension-telemetry').with({ default: Reporter });
+        rewiremock('@vscode/extension-telemetry').with({ default: Reporter });
 
         const eventName = 'Testing';
         const properties = { hello: 'world', foo: 'bar' };
@@ -179,7 +185,6 @@ suite('Telemetry', () => {
         expect(Reporter.properties[0].stackTrace).to.be.length.greaterThan(1);
         delete Reporter.properties[0].stackTrace;
         expect(Reporter.properties).to.deep.equal([expectedErrorProperties]);
-        expect(Reporter.errorProps).to.deep.equal([]);
     });
     test('Send Error Telemetry with stack trace', () => {
         rewiremock.enable();
@@ -205,7 +210,7 @@ suite('Telemetry', () => {
             'at tryOnImmediate (timers.js:751:5)',
             'at processImmediate [as _immediateCallback] (timers.js:722:5)'
         ].join('\n\t');
-        rewiremock('vscode-extension-telemetry').with({ default: Reporter });
+        rewiremock('@vscode/extension-telemetry').with({ default: Reporter });
 
         const eventName = 'Testing';
         const properties = { hello: 'world', foo: 'bar' };
@@ -228,7 +233,6 @@ suite('Telemetry', () => {
         expect(Reporter.measures).to.deep.equal([measures]);
         expect(Reporter.properties).to.deep.equal([expectedErrorProperties]);
         expect(stackTrace).to.be.length.greaterThan(1);
-        expect(Reporter.errorProps).to.deep.equal([]);
 
         const expectedStack = [
             `at Context.test ${root}/src/test/telemetry/index.unit.test.ts:50:23`,

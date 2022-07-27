@@ -6,10 +6,10 @@
 // /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
 // import { assert } from 'chai';
 // import * as sinon from 'sinon';
-// import { Common } from '../../../client/common/utils/localize';
-// import { IVSCodeNotebook } from '../../../client/common/application/types';
-// import { traceInfo } from '../../../client/common/logger';
-// import { IDisposable, Product } from '../../../client/common/types';
+// import { Common } from '../../../platform/common/utils/localize';
+// import { IVSCodeNotebook } from '../../../platform/common/application/types';
+// import { traceInfo } from '../../../platform/common/logger.node';
+// import { IDisposable, Product } from '../../../platform/common/types';
 // import { IExtensionTestApi } from '../../common';
 // import { initialize } from '../../initialize';
 // import {
@@ -20,22 +20,21 @@
 //     waitForExecutionCompletedSuccessfully,
 //     hijackPrompt,
 //     createEmptyPythonNotebook,
-//     workAroundVSCodeNotebookStartPages,
-//     waitForTextOutput
+// //     waitForTextOutput
 // } from './helper';
-// import { ProductNames } from '../../../client/common/installer/productNames';
-// import { INotebookControllerManager } from '../../../client/datascience/notebook/types';
-// import { IKernelProvider } from '../../../client/datascience/jupyter/kernels/types';
+// import { ProductNames } from '../../../platform/common/installer/productNames';
+// import { INotebookControllerManager } from '../../../notebooks/types';
+// import { IKernelProvider } from '../../../platform/../kernels/types';
 // import {
-//     IJupyterSession,
+//     IJupyterKernelConnectionSession,
 //     INotebook,
 //     INotebookProvider,
 //     KernelSocketInformation
-// } from '../../../client/datascience/types';
+// } from '../../../platform/datascience/types';
 // import { instance, mock, when } from 'ts-mockito';
 // import { Subject } from 'rxjs-compat/Subject';
 // import { EventEmitter, NotebookDocument } from 'vscode';
-// import { ServerStatus } from '../../../datascience-ui/interactive-common/mainState';
+// import { ServerStatus } from '../../../webviews/webview-side/interactive-common/mainState';
 // import { MockJupyterSession } from '../mockJupyterSession';
 // import type * as nbformat from '@jupyterlab/nbformat';
 
@@ -68,8 +67,7 @@
 //         if (!(await canRunNotebookTests())) {
 //             return this.skip();
 //         }
-//         await workAroundVSCodeNotebookStartPages();
-//         await hijackPrompt(
+// //         await hijackPrompt(
 //             'showErrorMessage',
 //             { endsWith: expectedPromptMessageSuffix },
 //             { text: Common.install(), clickImmediately: true },
@@ -101,7 +99,7 @@
 //         traceInfo(`Ended Test (completed) ${this.currentTest?.title}`);
 //     });
 //     suiteTeardown(() => closeNotebooksAndCleanUpAfterTests(disposables));
-//     function createKernelWithMockJupyterSession(notebook: NotebookDocument, session: IJupyterSession) {
+//     function createKernelWithMockJupyterSession(notebook: NotebookDocument, session: IJupyterKernelConnectionSession) {
 //         const controller = controllerManager.getSelectedNotebookController(notebook);
 //         if (!controller) {
 //             return;

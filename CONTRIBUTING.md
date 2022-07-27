@@ -2,13 +2,10 @@
 
 ---
 
-| `main` branch                                                                                                                                                                                                |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [![Insiders VSIX](https://github.com/microsoft/vscode-jupyter/workflows/Insiders%20VSIX/badge.svg?branch=main)](https://github.com/microsoft/vscode-jupyter/workflows/Insiders%20VSIX/badge.svg?branch=main) |
+| `main` branch |
+| ------------- |
 
-[[Development build](https://pvsc.blob.core.windows.net/extension-builds/ms-toolsai-jupyter-insiders.vsix)]
-
----
+## | ![Main Build](https://github.com/microsoft/vscode-jupyter/actions/workflows/build-test.yml/badge.svg?branch=main)
 
 [For contributing to the [Microsoft Python Language Server](https://github.com/Microsoft/python-language-server) see its own repo; for [Pylance](https://github.com/microsoft/pylance-release) see its own repo; for [debugpy](https://github.com/microsoft/debugpy) see its own repo]
 
@@ -16,15 +13,17 @@
 
 ### Prerequisites
 
-1. [Node.js](https://nodejs.org/) 14.16.0
-1. [Python](https://www.python.org/) 2.7 or later
-1. Windows, macOS, or Linux
-1. [Visual Studio Code](https://code.visualstudio.com/)
-1. The following VS Code extensions:
+1. [Node.js](https://nodejs.org/) 16.14.2
+2. [npm](https://www.npmjs.com/) 8.3.0
+3. [Python](https://www.python.org/) 3.6 or later
+4. Windows, macOS, or Linux
+5. [Visual Studio Code](https://code.visualstudio.com/)
+6. The following VS Code extensions:
     - [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint)
     - [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode)
     - [EditorConfig for VS Code](https://marketplace.visualstudio.com/items?itemName=EditorConfig.EditorConfig)
     - [Python Extension for VS Code](https://marketplace.visualstudio.com/items?itemName=ms-python.python)
+    - [TypeScript + Webpack Problem Matchers](https://marketplace.visualstudio.com/items?itemName=amodio.tsl-problem-matcher)
 
 ### Setup
 
@@ -32,6 +31,8 @@
 git clone https://github.com/microsoft/vscode-jupyter
 cd vscode-jupyter
 npm ci
+# Run this to setup the necessary pre-commit hooks.
+npm run setup-precommit-hook
 python3 -m venv .venv
 # Activate the virtual environment as appropriate for your shell, For example, on bash it's ...
 source .venv/bin/activate
@@ -45,12 +46,12 @@ python -m pip --disable-pip-version-check install -t ./pythonFiles/lib/python --
 
 ### Incremental Build
 
-Run the `Compile` and `Compile Web Views` build Tasks from the [Run Build Task...](https://code.visualstudio.com/docs/editor/tasks) command picker (short cut `CTRL+SHIFT+B` or `⇧⌘B`). This will leave build tasks running in the background and which will re-run as files are edited and saved. You can see the output from either task in the Terminal panel (use the selector to choose which output to look at).
+Run the `Compile`, `Compile Web Views`, and `Compile Web Extension` build Tasks from the [Run Build Task...](https://code.visualstudio.com/docs/editor/tasks) command picker (short cut `CTRL+SHIFT+B` or `⇧⌘B`). This will leave build tasks running in the background and which will re-run as files are edited and saved. You can see the output from either task in the Terminal panel (use the selector to choose which output to look at).
 
 You can also compile from the command-line. For a full compile you can use:
 
 ```shell
-npx gulp prePublishNonBundle
+npx gulp prePublishNonBundleNLS
 ```
 
 For incremental builds you can use the following commands depending on your needs:
@@ -102,25 +103,14 @@ Alter the `launch.json` file in the `"Debug Unit Tests"` section by setting the 
 
 ...this will only run the suite with the tests you care about during a test run (be sure to set the debugger to run the `Debug Unit Tests` launcher).
 
-### Running Functional Tests
-
-Functional tests are those in files with extension `.functional.test.ts`.
-These tests are similar to integration tests in scope, but are run like unit tests.
-
-You can run functional tests in a similar way to that for unit tests:
-
--   via the "Functional Tests" launch option, or
--   on the command line via `npm run test:functional`
-
 ### Running Integration Tests (with VS Code)
 
-Note: Integration tests are those in files with extension `*.vscode.test.ts`.
+Note: Integration tests are those in files with extension `*.vscode.test*.ts`.
 
 1. Make sure you have compiled all code (done automatically when using incremental building)
-1. Ensure you have disabled breaking into 'Uncaught Exceptions' when running the Unit Tests
+1. Some of the tests require specific virtual environments. Run the 'src/test/datascience/setupTestEnvs.cmd` (or equivalent) to create them.
 1. For the linters and formatters tests to pass successfully, you will need to have those corresponding Python libraries installed locally by using the `./requirements.txt` and `build/test-requirements.txt` files
 1. Run the tests via `npm run` or the Debugger launch options (you can "Start Without Debugging").
-1. **Note** you will be running tests under the default Python interpreter for the system.
 
 You can also run the tests from the command-line (after compiling):
 
@@ -216,7 +206,7 @@ Clone the repo into any directory, open that directory in VSCode, and use the `E
 Information on our coding standards can be found [here](https://github.com/Microsoft/vscode-jupyter/blob/main/CODING_STANDARDS.md).
 We have CI tests to ensure the code committed will adhere to the above coding standards.
 
-Messages displayed to the user must be localized using/created constants from/in the [localize.ts](https://github.com/Microsoft/vscode-jupyter/blob/main/src/client/common/utils/localize.ts) file.
+Messages displayed to the user must be localized using/created constants from/in the [localize.ts](https://github.com/Microsoft/vscode-jupyter/blob/main/src/platform/common/utils/localize.ts) file.
 
 ## Development process
 
@@ -226,6 +216,32 @@ project maintainers do what they do to keep this project running
 smoothly, but it allows you to help out by noticing when a step is
 missed or to learn in case someday you become a project maintainer as
 well!
+
+### Folder Structure
+
+At a high level we have a bunch of folders. Each high level is described in this wiki [page](https://github.com/microsoft/vscode-jupyter/wiki/Source-Code-Organization)
+
+### Typical workflow
+
+Here's an example of a typical workflow:
+
+1. Sync to main (get your fork's main to match vscode-jupyter's main)
+1. Create branch
+1. `npm ci`
+1. `npm run clean`
+1. Start VS code Insiders root
+1. CTRL+SHIFT+B and build `Compile Web Views` and `Compile`
+1. Make code changes
+1. Write and [run](https://github.com/microsoft/vscode-jupyter/blob/29c4be79f64df1858692321b43c3079bb77bdd69/.vscode/launch.json#L252) unit tests if appropriate
+1. Test with [`Extension`](https://github.com/microsoft/vscode-jupyter/blob/29c4be79f64df1858692321b43c3079bb77bdd69/.vscode/launch.json#L6) launch task
+1. Repeat until works in normal extension
+1. Test with [`Extension (web)`](https://github.com/microsoft/vscode-jupyter/blob/29c4be79f64df1858692321b43c3079bb77bdd69/.vscode/launch.json#L34) launch task
+1. Run [jupyter notebook server](https://github.com/microsoft/vscode-jupyter/wiki/Connecting-to-a-remote-Jupyter-server-from-vscode.dev) to use in web testing
+1. Repeat until works in web extension
+1. Write integration tests and [run](https://github.com/microsoft/vscode-jupyter/blob/29c4be79f64df1858692321b43c3079bb77bdd69/.vscode/launch.json#L216) locally.
+1. Submit PR
+1. Check PR output to make sure tests don't fail.
+1. Debug [CI test failures](https://github.com/microsoft/vscode-jupyter/wiki/Tests)
 
 ### Helping others
 
@@ -289,7 +305,7 @@ Steps to build the extension on your machine once you've cloned the repo:
 > npm install -g vsce
 # Perform the next steps in the vscode-jupyter folder.
 > npm ci
-> python3 -m pip --disable-pip-version-check install -t ./pythonFiles/lib/python --no-cache-dir --implementation py --no-deps --upgrade -r requirements.txt
+> python3 -m pip --disable-pip-version-check install -t ./pythonFiles/lib/python --no-cache-dir --implementation py --no-deps --upgrade -r requirements.txt --no-user
 > npm run clean
 > npm run package # This step takes around 10 minutes.
 ```

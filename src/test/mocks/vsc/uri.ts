@@ -7,7 +7,7 @@
 /* eslint-disable */
 
 import { CharCode } from './charCode';
-import * as path from 'path';
+import * as path from '../../../platform/vscode-path/path';
 
 export namespace vscUri {
     const isWindows = /^win/.test(process.platform);
@@ -476,14 +476,14 @@ export namespace vscUri {
             super(schemeOrData as any, authority, path, query, fragment, _strict);
             this._fsPath = this.fsPath;
         }
-        get fsPath(): string {
+        override get fsPath(): string {
             if (!this._fsPath) {
                 this._fsPath = _makeFsPath(this);
             }
             return this._fsPath;
         }
 
-        toString(skipEncoding: boolean = false): string {
+        override toString(skipEncoding: boolean = false): string {
             if (!skipEncoding) {
                 if (!this._formatted) {
                     this._formatted = _asFormatted(this, false);
@@ -495,7 +495,7 @@ export namespace vscUri {
             }
         }
 
-        toJSON(): UriComponents {
+        override toJSON(): UriComponents {
             const res = <UriState>{
                 $mid: 1
             };

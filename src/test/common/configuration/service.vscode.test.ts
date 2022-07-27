@@ -2,11 +2,12 @@
 // Licensed under the MIT License.
 import { expect } from 'chai';
 import { workspace } from 'vscode';
-import { AsyncDisposableRegistry } from '../../../client/common/asyncDisposableRegistry';
-import { IAsyncDisposableRegistry, IConfigurationService } from '../../../client/common/types';
-import { IServiceContainer } from '../../../client/ioc/types';
-import { getExtensionSettings } from '../../common';
-import { initialize } from '../../initialize';
+import { IWorkspaceService } from '../../../platform/common/application/types';
+import { AsyncDisposableRegistry } from '../../../platform/common/asyncDisposableRegistry';
+import { IAsyncDisposableRegistry, IConfigurationService } from '../../../platform/common/types';
+import { IServiceContainer } from '../../../platform/ioc/types';
+import { getExtensionSettings } from '../../common.node';
+import { initialize } from '../../initialize.node';
 
 // eslint-disable-next-line
 suite('Configuration Service', () => {
@@ -15,10 +16,11 @@ suite('Configuration Service', () => {
         serviceContainer = (await initialize()).serviceContainer;
     });
 
-    test('Ensure same instance of settings return', () => {
+    test('Ensure same instance of settings return', async () => {
         const workspaceUri = workspace.workspaceFolders![0].uri;
         const settings = serviceContainer.get<IConfigurationService>(IConfigurationService).getSettings(workspaceUri);
-        const instanceIsSame = settings === getExtensionSettings(workspaceUri);
+        const workspaceService = serviceContainer.get<IWorkspaceService>(IWorkspaceService);
+        const instanceIsSame = settings === (await getExtensionSettings(workspaceUri, workspaceService));
         expect(instanceIsSame).to.be.equal(true, 'Incorrect settings');
     });
 

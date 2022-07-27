@@ -20,18 +20,21 @@ export function createDocument(
     // Split our string on newline chars
     const inputLines = inputText.split(/\r?\n/);
 
+    const uri = Uri.file(fileName);
+
     document.setup((d) => d.languageId).returns(() => 'python');
 
     // First set the metadata
     document
-        .setup((d) => d.fileName)
-        .returns(() => Uri.file(fileName).fsPath)
+        .setup((d) => d.uri)
+        .returns(() => uri)
         .verifiable(times);
+    // eslint-disable-next-line local-rules/dont-use-fspath
+    document.setup((d) => d.fileName).returns(() => uri.fsPath);
     document
         .setup((d) => d.version)
         .returns(() => fileVersion)
         .verifiable(times);
-    document.setup((d) => d.uri).returns(() => Uri.file(fileName));
 
     // Next add the lines in
     document.setup((d) => d.lineCount).returns(() => inputLines.length);

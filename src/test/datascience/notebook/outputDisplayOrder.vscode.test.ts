@@ -4,16 +4,16 @@
 'use strict';
 
 /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
-import * as path from 'path';
+import * as path from '../../../platform/vscode-path/path';
 import { assert } from 'chai';
-import { traceInfo } from '../../../client/common/logger';
-import { EXTENSION_ROOT_DIR_FOR_TESTS } from '../../constants';
-import { openNotebook } from '../helpers';
-import { canRunNotebookTests, closeNotebooksAndCleanUpAfterTests } from './helper';
-import { window } from 'vscode';
-import { initialize } from '../../initialize';
+import { traceInfo } from '../../../platform/logging';
+import { EXTENSION_ROOT_DIR_FOR_TESTS } from '../../constants.node';
+import { openNotebook } from '../helpers.node';
+import { closeNotebooksAndCleanUpAfterTests } from './helper.node';
+import { Uri, window } from 'vscode';
+import { initialize } from '../../initialize.node';
 import type * as nbformat from '@jupyterlab/nbformat';
-import { cellOutputToVSCCellOutput } from '../../../client/datascience/notebook/helpers/helpers';
+import { cellOutputToVSCCellOutput } from '../../../kernels/execution/helpers';
 
 /* eslint-disable @typescript-eslint/no-explicit-any, no-invalid-this */
 suite('DataScience - VSCode Notebook - (Validate Output order)', function () {
@@ -26,9 +26,6 @@ suite('DataScience - VSCode Notebook - (Validate Output order)', function () {
         'withMixedMimeTypeOutput.ipynb'
     );
     suiteSetup(async function () {
-        if (!(await canRunNotebookTests())) {
-            return this.skip();
-        }
         await initialize();
     });
     setup(async function () {
@@ -41,8 +38,8 @@ suite('DataScience - VSCode Notebook - (Validate Output order)', function () {
     });
     suiteTeardown(() => closeNotebooksAndCleanUpAfterTests());
     test('Verify order of outputs in existing ipynb file', async () => {
-        await openNotebook(templateIPynb);
-        const cells = window.activeNotebookEditor?.document?.getCells()!;
+        await openNotebook(Uri.file(templateIPynb));
+        const cells = window.activeNotebookEditor?.notebook?.getCells()!;
 
         const expectedOutputItemMimeTypes = [
             [['text/html', 'text/plain']],

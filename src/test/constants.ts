@@ -1,26 +1,54 @@
-// Copyright (c) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT License.
+export const JVSC_EXTENSION_ID_FOR_TESTS = 'ms-toolsai.jupyter';
 
-import * as path from 'path';
-import { IS_CI_SERVER, IS_CI_SERVER_TEST_DEBUGGER } from './ciConstants';
+export type TestSettingsType = {
+    isSmokeTest: boolean;
+    isRemoteNativeTest: boolean;
+    isNonRawNativeTest: boolean;
+    isCIServer: boolean;
+    isCIServerTestDebuggable: boolean;
+    isCondaTest: boolean;
+    isPerfTest: boolean;
+};
 
-// Activating extension for Multiroot and Debugger CI tests for Windows takes just over 2 minutes sometimes, so 3 minutes seems like a safe margin
+let testSettings: TestSettingsType = {
+    isSmokeTest: false,
+    isRemoteNativeTest: false,
+    isNonRawNativeTest: false,
+    isCIServer: false,
+    isCIServerTestDebuggable: false,
+    isCondaTest: false,
+    isPerfTest: false
+};
+
 export const MAX_EXTENSION_ACTIVATION_TIME = 180_000;
 export const TEST_TIMEOUT = 25000;
+export const JUPYTER_SERVER_URI = 'TOBEREPLACED_WITHURI';
 export const TEST_RETRYCOUNT = 0;
-export const IS_SMOKE_TEST = process.env.VSC_JUPYTER_SMOKE_TEST === '1';
-export const IS_PERF_TEST = process.env.VSC_JUPYTER_PERF_TEST === '1';
-export const IS_REMOTE_NATIVE_TEST = (process.env.VSC_JUPYTER_REMOTE_NATIVE_TEST || '').toLowerCase() === 'true';
-export const IS_NON_RAW_NATIVE_TEST = (process.env.VSC_JUPYTER_NON_RAW_NATIVE_TEST || '').toLowerCase() === 'true';
-export const IS_MULTI_ROOT_TEST = isMultirootTest();
-export const IS_CONDA_TEST = (process.env.VSC_JUPYTER_CI_IS_CONDA || '').toLowerCase() === 'true';
+export function IS_SMOKE_TEST() {
+    return testSettings.isSmokeTest;
+}
+export function IS_PERF_TEST() {
+    return testSettings.isPerfTest;
+}
+export function IS_REMOTE_NATIVE_TEST() {
+    return testSettings.isRemoteNativeTest;
+}
+export function IS_NON_RAW_NATIVE_TEST() {
+    return testSettings.isNonRawNativeTest;
+}
+export const IS_MULTI_ROOT_TEST = isMultirootTest;
+export function IS_CONDA_TEST() {
+    return testSettings.isCondaTest;
+}
 
 // If running on CI server, then run debugger tests ONLY if the corresponding flag is enabled.
-export const TEST_DEBUGGER = IS_CI_SERVER ? IS_CI_SERVER_TEST_DEBUGGER : true;
+export function TEST_DEBUGGER() {
+    return testSettings.isCIServer ? testSettings.isCIServerTestDebuggable : true;
+}
 
 function isMultirootTest() {
     // No need to run smoke nor perf tests in a multi-root environment.
-    if (IS_SMOKE_TEST || IS_PERF_TEST) {
+    if (IS_SMOKE_TEST() || IS_PERF_TEST()) {
         return false;
     }
     try {
@@ -34,12 +62,8 @@ function isMultirootTest() {
     }
 }
 
-export const EXTENSION_ROOT_DIR_FOR_TESTS = path.join(__dirname, '..', '..');
-export const JVSC_EXTENSION_ID_FOR_TESTS = 'ms-toolsai.jupyter';
+export function setTestSettings(newSettings: Partial<TestSettingsType>) {
+    testSettings = { ...testSettings, ...newSettings };
+}
 
-export const SMOKE_TEST_EXTENSIONS_DIR = path.join(
-    EXTENSION_ROOT_DIR_FOR_TESTS,
-    'tmp',
-    'ext',
-    'smokeTestExtensionsFolder'
-);
+export const IPYTHON_VERSION_CODE = 'import IPython\nprint(int(IPython.__version__[0]))\n';

@@ -3,18 +3,17 @@
 
 /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
 import { assert } from 'chai';
-import * as path from 'path';
+import * as path from '../../../../platform/vscode-path/path';
 import * as fs from 'fs-extra';
 import * as sinon from 'sinon';
-import { languages } from 'vscode';
-import { traceInfo } from '../../../../client/common/logger';
-import { IDisposable } from '../../../../client/common/types';
-import { IInterpreterService } from '../../../../client/interpreter/contracts';
-import { captureScreenShot, getOSType, IExtensionTestApi, OSType, waitForCondition } from '../../../common';
-import { EXTENSION_ROOT_DIR_FOR_TESTS, IS_REMOTE_NATIVE_TEST } from '../../../constants';
-import { initialize, IS_CI_SERVER } from '../../../initialize';
+import { languages, Uri } from 'vscode';
+import { traceInfo } from '../../../../platform/logging';
+import { IDisposable } from '../../../../platform/common/types';
+import { IInterpreterService } from '../../../../platform/interpreter/contracts';
+import { captureScreenShot, IExtensionTestApi, waitForCondition } from '../../../common.node';
+import { EXTENSION_ROOT_DIR_FOR_TESTS, IS_REMOTE_NATIVE_TEST } from '../../../constants.node';
+import { initialize, IS_CI_SERVER } from '../../../initialize.node';
 import {
-    canRunNotebookTests,
     closeNotebooksAndCleanUpAfterTests,
     insertCodeCell,
     startJupyterServer,
@@ -23,23 +22,27 @@ import {
     waitForKernelToChange,
     waitForDiagnostics,
     defaultNotebookTestTimeout
-} from '../helper';
-import { IVSCodeNotebook } from '../../../../client/common/application/types';
-import { IPythonExecutionFactory } from '../../../../client/common/process/types';
+} from '../helper.node';
+import { IVSCodeNotebook } from '../../../../platform/common/application/types';
+import { IPythonExecutionFactory } from '../../../../platform/common/process/types.node';
+import { PythonEnvironment } from '../../../../platform/pythonEnvironments/info';
+import { setIntellisenseTimeout } from '../../../../standalone/intellisense/pythonKernelCompletionProvider';
+import { Settings } from '../../../../platform/common/constants';
+import { getOSType, OSType } from '../../../../platform/common/utils/platform';
 
 /* eslint-disable @typescript-eslint/no-explicit-any, no-invalid-this */
 suite('DataScience - Intellisense Switch interpreters in a notebook', function () {
     let api: IExtensionTestApi;
     const disposables: IDisposable[] = [];
     const executable = getOSType() === OSType.Windows ? 'Scripts/python.exe' : 'bin/python'; // If running locally on Windows box.
-    const venvNoKernelPython = path.join(
-        EXTENSION_ROOT_DIR_FOR_TESTS,
-        'src/test/datascience/.venvnokernel',
-        executable
+    const venvNoKernelPython = Uri.file(
+        path.join(EXTENSION_ROOT_DIR_FOR_TESTS, 'src/test/datascience/.venvnokernel', executable)
     );
-    const venvKernelPython = path.join(EXTENSION_ROOT_DIR_FOR_TESTS, 'src/test/datascience/.venvkernel', executable);
-    let venvNoKernelPythonPath: string;
-    let venvKernelPythonPath: string;
+    const venvKernelPython = Uri.file(
+        path.join(EXTENSION_ROOT_DIR_FOR_TESTS, 'src/test/datascience/.venvkernel', executable)
+    );
+    let venvNoKernelPythonPath: Uri;
+    let venvKernelPythonPath: Uri;
     let vscodeNotebook: IVSCodeNotebook;
 
     this.timeout(120_000);
@@ -47,18 +50,15 @@ suite('DataScience - Intellisense Switch interpreters in a notebook', function (
         traceInfo(`Start Suite Intellisense Switch interpreters in a notebook`);
         this.timeout(120_000);
         api = await initialize();
-        if (IS_REMOTE_NATIVE_TEST) {
+        if (IS_REMOTE_NATIVE_TEST()) {
             // https://github.com/microsoft/vscode-jupyter/issues/6331
-            return this.skip();
-        }
-        if (!(await canRunNotebookTests())) {
             return this.skip();
         }
         // These are slow tests, hence lets run only on linux on CI.
         if (
             (IS_CI_SERVER && getOSType() !== OSType.Linux) ||
-            !fs.pathExistsSync(venvNoKernelPython) ||
-            !fs.pathExistsSync(venvKernelPython)
+            !fs.pathExistsSync(venvNoKernelPython.fsPath) ||
+            !fs.pathExistsSync(venvKernelPython.fsPath)
         ) {
             // Virtual env does not exist.
             return this.skip();
@@ -75,12 +75,12 @@ suite('DataScience - Intellisense Switch interpreters in a notebook', function (
         if (!activeInterpreter || !interpreter1 || !interpreter2) {
             throw new Error('Unable to get information for interpreter 1');
         }
-        venvNoKernelPythonPath = interpreter1.path;
-        venvKernelPythonPath = interpreter2.path;
+        venvNoKernelPythonPath = interpreter1.uri;
+        venvKernelPythonPath = interpreter2.uri;
 
         // Make sure to remove pandas from the venvnokernel. This test relies on it.
         const factory = api.serviceContainer.get<IPythonExecutionFactory>(IPythonExecutionFactory);
-        const process = await factory.create({ pythonPath: venvNoKernelPythonPath });
+        const process = await factory.create({ interpreter: { uri: venvNoKernelPythonPath } as PythonEnvironment });
         await process.execModule('pip', ['uninstall', 'pandas'], { throwOnStdErr: false });
 
         await startJupyterServer();
@@ -94,14 +94,14 @@ suite('DataScience - Intellisense Switch interpreters in a notebook', function (
         sinon.restore();
         await startJupyterServer();
         await createEmptyPythonNotebook(disposables);
-        process.env.VSC_JUPYTER_IntellisenseTimeout = '30000';
+        setIntellisenseTimeout(30000);
         traceInfo(`Start Test (completed) ${this.currentTest?.title}`);
     });
     teardown(async function () {
         traceInfo(`Ended Test ${this.currentTest?.title}`);
-        delete process.env.VSC_JUPYTER_IntellisenseTimeout;
+        setIntellisenseTimeout(Settings.IntellisenseTimeout);
         if (this.currentTest?.isFailed()) {
-            await captureScreenShot(this.currentTest?.title);
+            await captureScreenShot(this);
         }
         await closeNotebooksAndCleanUpAfterTests(disposables);
         traceInfo(`Ended Test (completed) ${this.currentTest?.title}`);
@@ -120,7 +120,7 @@ suite('DataScience - Intellisense Switch interpreters in a notebook', function (
         await waitForKernelToChange({ interpreterPath: venvNoKernelPythonPath });
 
         // Wait for an error to show up
-        cell = vscodeNotebook.activeNotebookEditor?.document.cellAt(0)!;
+        cell = vscodeNotebook.activeNotebookEditor?.notebook.cellAt(0)!;
         await waitForCondition(
             async () => {
                 diagnostics = languages.getDiagnostics(cell.document.uri);
@@ -134,7 +134,7 @@ suite('DataScience - Intellisense Switch interpreters in a notebook', function (
         await waitForKernelToChange({ interpreterPath: venvKernelPythonPath });
 
         // Now there should be 1 error again
-        cell = vscodeNotebook.activeNotebookEditor?.document.cellAt(0)!;
+        cell = vscodeNotebook.activeNotebookEditor?.notebook.cellAt(0)!;
         await waitForCondition(
             async () => {
                 diagnostics = languages.getDiagnostics(cell.document.uri);

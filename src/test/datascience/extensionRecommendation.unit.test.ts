@@ -4,16 +4,16 @@
 import type * as nbformat from '@jupyterlab/nbformat';
 import { anything, instance, mock, verify, when } from 'ts-mockito';
 import { EventEmitter, Memento, NotebookDocument } from 'vscode';
-import { IApplicationShell, ICommandManager, IVSCodeNotebook } from '../../client/common/application/types';
-import { disposeAllDisposables } from '../../client/common/helpers';
-import { IDisposable, IExtensions } from '../../client/common/types';
-import { sleep } from '../../client/common/utils/async';
-import { Common } from '../../client/common/utils/localize';
-import { ExtensionRecommendationService } from '../../client/datascience/extensionRecommendation';
-import { JupyterNotebookView } from '../../client/datascience/notebook/constants';
-import { INotebookControllerManager } from '../../client/datascience/notebook/types';
-import { VSCodeNotebookController } from '../../client/datascience/notebook/vscodeNotebookController';
-import { IJupyterKernelSpec } from '../../client/datascience/types';
+import { IApplicationShell, ICommandManager, IVSCodeNotebook } from '../../platform/common/application/types';
+import { disposeAllDisposables } from '../../platform/common/helpers';
+import { IDisposable, IExtensions } from '../../platform/common/types';
+import { sleep } from '../../platform/common/utils/async';
+import { Common } from '../../platform/common/utils/localize';
+import { VSCodeNotebookController } from '../../notebooks/controllers/vscodeNotebookController';
+import { IJupyterKernelSpec } from '../../kernels/types';
+import { ExtensionRecommendationService } from '../../standalone/recommendation/extensionRecommendation.node';
+import { JupyterNotebookView } from '../../platform/common/constants';
+import { IControllerSelection } from '../../notebooks/controllers/types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 suite('DataScience Extension Recommendation', () => {
@@ -23,11 +23,11 @@ suite('DataScience Extension Recommendation', () => {
                 const disposables: IDisposable[] = [];
                 let recommendation: ExtensionRecommendationService;
                 let vscNotebook: IVSCodeNotebook;
-                let controllerManager: INotebookControllerManager;
                 let memento: Memento;
                 let appShell: IApplicationShell;
                 let extensions: IExtensions;
                 let commandManager: ICommandManager;
+                let controllerSelection: IControllerSelection;
                 let onDidOpenNotebookDocument: EventEmitter<NotebookDocument>;
                 let onNotebookControllerSelected: EventEmitter<{
                     notebook: NotebookDocument;
@@ -44,15 +44,15 @@ suite('DataScience Extension Recommendation', () => {
                     }>();
                     vscNotebook = mock<IVSCodeNotebook>();
                     when(vscNotebook.onDidOpenNotebookDocument).thenReturn(onDidOpenNotebookDocument.event);
-                    controllerManager = mock<INotebookControllerManager>();
-                    when(controllerManager.onNotebookControllerSelected).thenReturn(onNotebookControllerSelected.event);
+                    controllerSelection = mock<IControllerSelection>();
+                    when(controllerSelection.onControllerSelected).thenReturn(onNotebookControllerSelected.event);
                     memento = mock<Memento>();
                     appShell = mock<IApplicationShell>();
                     extensions = mock<IExtensions>();
                     commandManager = mock<ICommandManager>();
                     recommendation = new ExtensionRecommendationService(
                         instance(vscNotebook),
-                        instance(controllerManager),
+                        instance(controllerSelection),
                         disposables,
                         instance(memento),
                         instance(appShell),
@@ -92,7 +92,7 @@ suite('DataScience Extension Recommendation', () => {
                     const kernelSpec: IJupyterKernelSpec = {
                         language
                     } as any;
-                    when(controller.connection).thenReturn({ kind: 'startUsingKernelSpec', kernelSpec, id: '' });
+                    when(controller.connection).thenReturn({ kind: 'startUsingLocalKernelSpec', kernelSpec, id: '' });
                     return instance(controller);
                 }
                 test('No recommendations for python Notebooks', async () => {
@@ -126,7 +126,7 @@ suite('DataScience Extension Recommendation', () => {
                     onDidOpenNotebookDocument.fire(nb2);
 
                     // Only one prompt regardless of how many notebooks were opened.
-                    const expectedMessage = `The [.NET Interactive Notebooks Preview](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.dotnet-interactive-vscode) extension is recommended for notebooks targetting the language '${languageToBeTested}'`;
+                    const expectedMessage = `The [.NET Interactive Notebooks Preview](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.dotnet-interactive-vscode) extension is recommended for notebooks targeting the language '${languageToBeTested}'`;
                     verify(
                         appShell.showInformationMessage(
                             expectedMessage,
