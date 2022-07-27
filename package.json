@@ -8,10 +8,13 @@
     "author": {
         "name": "Microsoft Corporation"
     },
+  <<<<<<< dependabot/npm_and_yarn/src/ipywidgets/url-parse-1.5.7
     "extensionPack": [
         "ms-toolsai.jupyter-keymap",
         "ms-toolsai.jupyter-renderers"
     ],
+  =======
+  >>>>>>> Update-extension-license-to-MIT
     "license": "MIT",
     "homepage": "https://github.com/Microsoft/vscode-jupyter",
     "repository": {
