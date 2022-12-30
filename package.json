@@ -2004,7 +2004,7 @@
         "iconv-lite": "^0.4.21",
         "image-size": "^1.0.0",
         "inversify": "^5.0.1",
-        "is-online": "^9.0.0",
+        "is-online": "^10.0.0",
         "jquery": "^3.6.0",
         "jsonc-parser": "^2.0.3",
         "lodash": "^4.17.21",
@@ -2061,7 +2061,7 @@
         "zeromq": "^6.0.0-beta.6"
     },
     "devDependencies": {
-        "@actions/core": "^1.2.6",
+        "@actions/core": "^1.9.1",
         "@actions/github": "^4.0.0",
         "@babel/cli": "^7.15.4",
         "@babel/core": "^7.4.4",
